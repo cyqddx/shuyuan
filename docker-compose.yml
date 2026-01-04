@@ -1,0 +1,120 @@
+# ==========================================
+# 🐳 图床服务 Docker Compose 配置
+# ==========================================
+# 使用方法:
+#   1. 复制 .env.example 为 .env 并修改配置
+#   2. 运行: docker-compose up -d --build
+# ==========================================
+
+services:
+  # ==========================================
+  # 🚀 图床服务主容器
+  # ==========================================
+  tuchuang:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tuchuang_server
+    restart: unless-stopped
+
+    # 端口映射
+    ports:
+      - "8000:8000"
+
+    # 数据卷挂载 (持久化数据)
+    volumes:
+      - ./uploads:/app/uploads          # 本地存储目录
+      - ./files.db:/app/files.db        # SQLite 数据库
+      - ./logs:/app/logs                # 日志目录
+
+    # 环境变量 (也可通过 .env 文件配置)
+    environment:
+      # ========== 基础配置 [必填] ==========
+      - HOST_DOMAIN=${HOST_DOMAIN:-http://127.0.0.1:8000}
+
+      # ========== 鉴权配置 ==========
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - API_KEY=${API_KEY:-secret}
+
+      # ========== 加密配置 ==========
+      - ENCRYPTION_ENABLED=${ENCRYPTION_ENABLED:-false}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+
+      # ========== 压缩配置 ==========
+      - COMPRESSION_ENABLED=${COMPRESSION_ENABLED:-false}
+      - COMPRESSION_LEVEL=${COMPRESSION_LEVEL:-6}
+
+      # ========== OSS 云存储 ==========
+      - ENABLE_OSS=${ENABLE_OSS:-false}
+      - OSS_ENDPOINT=${OSS_ENDPOINT:-}
+      - OSS_BUCKET=${OSS_BUCKET:-}
+      - OSS_AK=${OSS_AK:-}
+      - OSS_SK=${OSS_SK:-}
+      - OSS_DOMAIN=${OSS_DOMAIN:-}
+
+      # ========== 限流配置 ==========
+      - RATE_LIMIT=${RATE_LIMIT:-60/minute}
+      - REDIS_URL=${REDIS_URL:-}
+
+      # ========== 安全配置 ==========
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-10485760}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # 资源限制 (可选)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 512M
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 256M
+
+  # ==========================================
+  # 📊 Prometheus (可选监控)
+  # ==========================================
+  # 取消注释以启用 Prometheus 监控
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: tuchuang_prometheus
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #   depends_on:
+  #     - tuchuang
+
+  # ==========================================
+  # 🔴 Redis (可选分布式限流)
+  # ==========================================
+  # 取消注释以启用 Redis 分布式限流
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: tuchuang_redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+
+# 持久化数据卷
+# volumes:
+#   redis_data:
