@@ -25,6 +25,8 @@ import asyncio  # 异步任务
 import anyio  # 异步文件操作
 import orjson  # 高性能 JSON 处理
 from fastapi import UploadFile, HTTPException
+from dataclasses import dataclass
+from typing import Any
 
 # ========== 内部模块导入 ==========
 from app.core.config import Config
@@ -33,6 +35,61 @@ from app.models import TimeLimit
 from app.core.logger import log
 from app.core.http_client import http_client
 from app.core.crypto import CryptoEngine
+
+
+# ==========================================
+# ⚙️ JSON 验证配置
+# ==========================================
+
+@dataclass
+class JSONValidationConfig:
+    """JSON 验证配置类"""
+    max_depth: int = 20        # 最大嵌套深度
+    max_fields: int = 1000     # 最大字段/数组长度
+    max_total_length: int = 10 * 1024 * 1024  # 最大总大小 (10MB)
+
+
+def _validate_json_structure(obj: Any, depth: int = 0, config: JSONValidationConfig | None = None) -> None:
+    """
+    递归验证 JSON 结构
+
+    防止深度嵌套攻击和超大对象攻击
+
+    Args:
+        obj: 待验证的 JSON 对象
+        depth: 当前嵌套深度
+        config: 验证配置
+
+    Raises:
+        HTTPException: 验证失败时抛出
+    """
+    if config is None:
+        config = JSONValidationConfig()
+
+    # 检查深度
+    if depth > config.max_depth:
+        raise HTTPException(
+            status_code=400,
+            detail=f"📄 JSON 嵌套过深（最大 {config.max_depth} 层）"
+        )
+
+    # 检查字段数量
+    if isinstance(obj, dict):
+        if len(obj) > config.max_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"📄 JSON 字段过多（最大 {config.max_fields} 个）"
+            )
+        for value in obj.values():
+            _validate_json_structure(value, depth + 1, config)
+    elif isinstance(obj, list):
+        if len(obj) > config.max_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"📄 JSON 数组过长（最大 {config.max_fields} 个元素）"
+            )
+        for item in obj:
+            _validate_json_structure(item, depth + 1, config)
 
 
 # ==========================================
@@ -114,20 +171,38 @@ def validate_and_minify(content: bytes) -> bytes:
         bytes: 压缩后的 JSON 字节数据 (无空格、无换行)
 
     Raises:
-        HTTPException: JSON 格式无效时抛出 400 错误
+        HTTPException: JSON 格式无效、过大、嵌套过深时抛出 400 错误
 
     注意:
         - orjson 比 stdlib json 快 5-10 倍
         - 强制校验确保存储的都是合法 JSON
+        - 验证深度、字段数量和总大小，防止恶意攻击
     """
+    config = JSONValidationConfig()
+
+    # 先检查总大小
+    if len(content) > config.max_total_length:
+        raise HTTPException(
+            status_code=413,
+            detail=f"📄 JSON 过大（最大 {config.max_total_length // 1024 // 1024} MB）"
+        )
+
     try:
         # 解析 JSON (同时校验格式)
         obj = orjson.loads(content)
+
+        # 验证 JSON 结构 (深度、字段数量)
+        _validate_json_structure(obj, config=config)
+
         # 序列化回 JSON (去除空格和换行)
         return orjson.dumps(obj)
+
     except orjson.JSONDecodeError:
         # JSON 格式无效
         raise HTTPException(status_code=400, detail="📄 JSON 格式无效，请检查文件内容")
+    except HTTPException:
+        # 重新抛出我们的验证错误
+        raise
 
 
 def calculate_expiry(limit: TimeLimit) -> datetime.datetime | None:
@@ -392,13 +467,13 @@ async def retrieve_file_content(file_id: str):
 
 async def clean_expired_task():
     """
-    🧹 后台清理过期文件任务
+    🧹 后台清理过期文件任务（优化版）
 
     功能:
         - 定期扫描数据库中的过期文件
-        - 删除本地文件
-        - 删除 OSS 文件 (如果启用)
-        - 删除数据库记录
+        - 批量删除本地文件
+        - 批量删除 OSS 文件 (如果启用)
+        - 批量删除数据库记录
 
     运行周期:
         - 每小时执行一次 (3600 秒)
@@ -406,61 +481,92 @@ async def clean_expired_task():
     注意:
         - 这是一个无限循环的任务，在应用启动时创建
         - 异常会被捕获并记录，不会中断任务循环
+        - 使用批量操作和并发处理提升性能
     """
 
     log.info("🧹 后台清理任务已启动，每小时执行一次")
 
+    # 批量大小
+    BATCH_SIZE = 100
+
     while True:
         try:
-            # ========== 1. 查询过期文件 ==========
+            # ========== 1. 分批查询过期文件 ==========
             conn = await get_db_connection()
             now = datetime.datetime.now()
 
-            # 查询所有过期文件
-            cursor = await conn.execute("SELECT id, local_path, oss_path FROM files WHERE expire_at < ?", (now,))
+            # 分批查询过期文件
+            cursor = await conn.execute(
+                "SELECT id, local_path, oss_path FROM files WHERE expire_at < ? LIMIT ?",
+                (now, BATCH_SIZE)
+            )
             rows = await cursor.fetchall()
 
-            if rows:
+            if not rows:
+                await conn.close()
+            else:
                 log.info(f"🧹 发现 {len(rows)} 个过期文件需要清理")
 
-            # ========== 2. 逐个处理过期文件 ==========
-            for row in rows:
-                fid = row['id']
-                l_path = row['local_path']
-                o_path = row['oss_path']
+                # ========== 2. 收集需要删除的文件信息 ==========
+                to_delete_local = []
+                to_delete_oss = []
+                file_ids = []
 
-                # 2.1 删除本地文件
-                full_path = os.path.join(Config.UPLOAD_DIR, l_path)
-                if os.path.exists(full_path):
-                    try:
-                        os.remove(full_path)
-                        log.info(f"🗑️ 清理任务: 已删除本地文件 {l_path}")
-                    except OSError as e:
-                        log.error(f"⚠️ 清理任务: 删除本地文件失败 {l_path}: {e}")
+                for row in rows:
+                    file_ids.append(row['id'])
+                    local_full = os.path.join(Config.UPLOAD_DIR, row['local_path'])
+                    to_delete_local.append(local_full)
+                    if row['oss_path']:
+                        to_delete_oss.append(row['oss_path'])
 
-                # 2.2 删除 OSS 文件 (如果有)
-                if o_path and Config.ENABLE_OSS:
-                    try:
-                        from app.core.oss_client import OSSClient
-                        await OSSClient.delete(o_path)
-                        log.info(f"☁️ 清理任务: 已删除 OSS 文件 {o_path}")
-                    except Exception as e:
-                        log.error(f"⚠️ 清理任务: 删除 OSS 文件失败 {o_path}: {e}")
+                # ========== 3. 并发删除本地文件 ==========
+                async def delete_local(path: str):
+                    if os.path.exists(path):
+                        try:
+                            await asyncio.to_thread(os.remove, path)
+                            return path, True
+                        except OSError as e:
+                            log.error(f"⚠️ 删除本地文件失败 {path}: {e}")
+                            return path, False
+                    return path, False
 
-                # 2.3 删除数据库记录
-                await conn.execute("DELETE FROM files WHERE id = ?", (fid,))
+                local_results = await asyncio.gather(
+                    *[delete_local(p) for p in to_delete_local],
+                    return_exceptions=True
+                )
 
-            # ========== 3. 提交事务 ==========
-            if rows:
+                deleted_count = sum(1 for r in local_results if isinstance(r, tuple) and r[1])
+                log.info(f"🗑️ 清理任务: 已删除 {deleted_count}/{len(to_delete_local)} 个本地文件")
+
+                # ========== 4. 批量删除 OSS 文件 ==========
+                if to_delete_oss and Config.ENABLE_OSS:
+                    from app.core.oss_client import OSSClient
+                    for oss_url in to_delete_oss:
+                        try:
+                            await OSSClient.delete(oss_url)
+                            log.info(f"☁️ 清理任务: 已删除 OSS 文件 {oss_url}")
+                        except Exception as e:
+                            log.error(f"⚠️ 删除 OSS 文件失败 {oss_url}: {e}")
+
+                # ========== 5. 批量删除数据库记录（单次事务）==========
+                placeholders = ','.join('?' * len(file_ids))
+                await conn.execute(
+                    f"DELETE FROM files WHERE id IN ({placeholders})",
+                    file_ids
+                )
                 await conn.commit()
-                log.info(f"✅ 清理任务完成，共清理 {len(rows)} 个文件")
+                await conn.close()
 
-            await conn.close()
+                log.info(f"✅ 清理任务完成，共清理 {len(file_ids)} 个文件")
+
+                # ========== 6. 继续检查是否还有更多 ==========
+                if len(rows) == BATCH_SIZE:
+                    continue
 
         except Exception as e:
             # 捕获所有异常，防止任务循环中断
             log.error(f"🚨 清理任务严重错误: {e}")
 
-        # ========== 4. 等待下次执行 ==========
+        # ========== 7. 等待下次执行 ==========
         # 每小时执行一次 (3600 秒)
         await asyncio.sleep(3600)

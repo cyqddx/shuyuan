@@ -17,6 +17,8 @@
 
 """
 
+import hmac
+
 from fastapi import Request, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 from slowapi import Limiter
@@ -78,6 +80,7 @@ async def verify_api_key(api_key: str = Security(api_key_header)) -> bool:
     注意:
         - auto_error=False 使得无 API Key 时不自动报错
         - 我们手动判断是否需要鉴权
+        - 使用 hmac.compare_digest 防止时序攻击
     """
 
     # ========== 检查鉴权开关 ==========
@@ -85,17 +88,27 @@ async def verify_api_key(api_key: str = Security(api_key_header)) -> bool:
         # 鉴权未开启，直接放行
         return True
 
-    # ========== 验证 API Key ==========
-    if api_key == Config.api_key:
+    # ========== 检查 API Key 是否存在 ==========
+    if api_key is None:
+        log.warning("⛔ 鉴权失败: 未提供 API Key")
+        raise HTTPException(
+            status_code=401,
+            detail="⛔ 未提供 API Key",
+            headers={"WWW-Authenticate": "ApiKey"}
+        )
+
+    # ========== 使用常量时间比较（防止时序攻击） ==========
+    # hmac.compare_digest 以恒定时间比较字符串，不会因字符串内容不同而暴露时间差异
+    if hmac.compare_digest(api_key, Config.api_key):
         # API Key 匹配，验证通过
         return True
 
     # ========== 鉴权失败 ==========
-    log.warning("⛔ 鉴权失败: 提供了无效的 API Key")
+    log.warning("⛔ 鉴权失败: API Key 不匹配")
 
     raise HTTPException(
         status_code=401,
-        detail="⛔ API Key 无效，请检查请求头中的 x-api-key",
+        detail="⛔ API Key 无效",
         headers={"WWW-Authenticate": "ApiKey"}
     )
 

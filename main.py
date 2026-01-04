@@ -15,13 +15,21 @@ import asyncio
 from contextlib import asynccontextmanager
 
 # FastAPI 核心组件
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # 限流异常处理
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+
+# 统一异常处理
+from app.core.error_handler import (
+    global_exception_handler,
+    validation_exception_handler,
+    http_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 
 # Prometheus 监控
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -43,7 +51,7 @@ from app.core.crypto import CryptoEngine
 # OSS 客户端 - 阿里云对象存储
 from app.core.oss_client import OSSClient
 # 数据库初始化
-from app.database import init_db
+from app.database import init_db, close_db
 # 后台清理任务
 from app.services import clean_expired_task
 # API 路由
@@ -124,6 +132,10 @@ async def lifespan(app: FastAPI):
 
     log.info("🛑 正在关闭图床服务...")
 
+    # 关闭数据库连接池
+    await close_db()
+    log.info("🗄️ 数据库连接池已关闭")
+
     # 优雅关闭后台任务 (等待最多 5 秒)
     try:
         await asyncio.wait_for(task, timeout=5)
@@ -189,6 +201,19 @@ app.state.limiter = limiter
 # 注册限流异常处理器 (超出限流时返回 429 错误)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# ==========================================
+# ⚠️ 统一异常处理挂载
+# ==========================================
+
+# 注册全局异常处理器 (未捕获的异常)
+app.add_exception_handler(Exception, global_exception_handler)
+
+# 注册参数校验异常处理器
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+# 注册 HTTP 异常处理器 (统一格式)
+app.add_exception_handler(HTTPException, http_exception_handler)
+
 
 # ==========================================
 # 📁 静态文件挂载
@@ -209,12 +234,13 @@ if static_dir.exists():
 favicon_path = static_dir / "favicon.ico"
 if favicon_path.exists():
     from fastapi import Response
+    import aiofiles
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon():
         """🎨 返回 favicon 图标"""
-        with open(favicon_path, "rb") as f:
-            content = f.read()
+        async with aiofiles.open(favicon_path, "rb") as f:
+            content = await f.read()
         return Response(content=content, media_type="image/x-icon")
 
 

@@ -71,6 +71,10 @@ tuchuang/
 │   └── favicon.ico         # 🎨 网站图标
 ├── uploads/                # 📁 本地存储目录
 ├── logs/                   # 📝 运行日志
+├── docs/                   # 📚 文档目录
+│   ├── DEPLOYMENT.md       # 🚀 部署指南
+│   ├── ERROR_CODES.md      # ⚠️ 错误码文档
+│   └── TROUBLESHOOTING.md  # 🔧 故障排查
 ├── .env                    # ⚙️ 配置文件
 ├── .env.example            # 📄 配置示例
 ├── pyproject.toml          # 📦 依赖配置
@@ -78,6 +82,16 @@ tuchuang/
 ├── Dockerfile              # 🐳 镜像构建
 └── main.py                 # 🚀 应用入口
 ```
+
+---
+
+## 📚 文档导航
+
+| 文档 | 说明 |
+|------|------|
+| [部署指南](docs/DEPLOYMENT.md) | 生产环境部署、监控、备份、安全建议 |
+| [错误码文档](docs/ERROR_CODES.md) | HTTP 状态码、业务错误码、错误响应格式 |
+| [故障排查](docs/TROUBLESHOOTING.md) | 常见问题及解决方案 |
 
 ---
 

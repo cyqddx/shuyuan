@@ -200,7 +200,10 @@ async def health_check() -> Dict[str, Any]:
         await conn.execute("SELECT 1")
         await conn.close()
     except Exception as e:
-        db_status = f"🔴 Error: {e}"
+        # 记录详细错误到日志
+        log.error(f"Database health check failed: {e}")
+        # 返回脱敏的错误信息
+        db_status = "🔴 Error"
 
     # ========== 检查加密引擎 ==========
     if Config.ENCRYPTION_ENABLED:
