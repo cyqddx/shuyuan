@@ -180,55 +180,55 @@ async def health_check() -> Dict[str, Any]:
     返回格式:
         ```json
         {
-            "status": "🟢 healthy",
+            "status": "🟢 健康",
             "version": "1.0.0",
             "components": {
-                "database": "🟢 OK",
-                "encryption": "🔴 Disabled",
-                "compression": "🔴 Disabled",
-                "oss": "🟢 OK",
-                "redis": "🔴 Disabled"
+                "database": "🟢 正常",
+                "encryption": "🔴 未启用",
+                "compression": "🔴 未启用",
+                "oss": "🟢 已启用",
+                "redis": "🔴 未启用"
             }
         }
         ```
     """
 
     # ========== 检查数据库连接 ==========
-    db_status = "🟢 OK"
+    db_status = "🟢 正常"
     try:
         conn = await get_db_connection()
         await conn.execute("SELECT 1")
         await conn.close()
     except Exception as e:
         # 记录详细错误到日志
-        log.error(f"Database health check failed: {e}")
+        log.error(f"数据库健康检查失败: {e}")
         # 返回脱敏的错误信息
-        db_status = "🔴 Error"
+        db_status = "🔴 异常"
 
     # ========== 检查加密引擎 ==========
     if Config.ENCRYPTION_ENABLED:
         from app.core.crypto import CryptoEngine
-        crypto_status = "🟢 Enabled" if CryptoEngine.is_enabled() else "🔴 Error"
+        crypto_status = "🟢 已启用" if CryptoEngine.is_enabled() else "🔴 异常"
     else:
-        crypto_status = "🔴 Disabled"
+        crypto_status = "🔴 未启用"
 
     # ========== 检查压缩 ==========
-    compression_status = "🟢 Enabled" if Config.COMPRESSION_ENABLED else "🔴 Disabled"
+    compression_status = "🟢 已启用" if Config.COMPRESSION_ENABLED else "🔴 未启用"
 
     # ========== 检查 OSS ==========
     if Config.ENABLE_OSS:
         from app.core.oss_client import OSSClient
-        oss_status = "🟢 Enabled" if OSSClient.is_enabled() else "🔴 Error"
+        oss_status = "🟢 已启用" if OSSClient.is_enabled() else "🔴 异常"
     else:
-        oss_status = "🔴 Disabled"
+        oss_status = "🔴 未启用"
 
     # ========== 检查 Redis ==========
-    redis_status = "🟢 Connected" if Config.REDIS_URL else "🔴 Disabled"
+    redis_status = "🟢 已连接" if Config.REDIS_URL else "🔴 未启用"
 
     # ========== 汇总状态 ==========
-    # 只有 "Error" 状态才算异常，"Disabled" 是正常状态
+    # 只有 "异常" 状态才算异常，"未启用" 是正常状态
     all_components = [db_status, crypto_status, compression_status, oss_status, redis_status]
-    overall_status = "🟢 healthy" if all("Error" not in s for s in all_components) else "🟡 degraded"
+    overall_status = "🟢 健康" if all("异常" not in s for s in all_components) else "🟡 降级"
 
     return {
         "status": overall_status,

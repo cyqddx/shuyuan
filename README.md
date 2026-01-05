@@ -234,14 +234,14 @@ GET /health
 **响应示例：**
 ```json
 {
-  "status": "🟢 healthy",
+  "status": "🟢 健康",
   "version": "1.0.0",
   "components": {
-    "database": "🟢 OK",
-    "encryption": "🔴 Disabled",
-    "compression": "🟢 Enabled",
-    "oss": "🔴 Disabled",
-    "redis": "🔴 Disabled"
+    "database": "🟢 正常",
+    "encryption": "🔴 未启用",
+    "compression": "🟢 已启用",
+    "oss": "🔴 未启用",
+    "redis": "🔴 未启用"
   }
 }
 ```

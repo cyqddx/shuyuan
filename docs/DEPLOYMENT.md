@@ -68,14 +68,14 @@ curl http://your-domain:8000/health
 
 # 预期响应
 {
-  "status": "🟢 healthy",
+  "status": "🟢 健康",
   "version": "1.0.0",
   "components": {
-    "database": "🟢 OK",
-    "encryption": "🟢 Enabled" / "🔴 Disabled",
-    "compression": "🟢 Enabled" / "🔴 Disabled",
-    "oss": "🟢 Enabled" / "🔴 Disabled",
-    "redis": "🟢 Connected" / "🔴 Disabled"
+    "database": "🟢 正常",
+    "encryption": "🟢 已启用" / "🔴 未启用",
+    "compression": "🟢 已启用" / "🔴 未启用",
+    "oss": "🟢 已启用" / "🔴 未启用",
+    "redis": "🟢 已连接" / "🔴 未启用"
   }
 }
 ```
