@@ -226,8 +226,9 @@ async def health_check() -> Dict[str, Any]:
     redis_status = "🟢 Connected" if Config.REDIS_URL else "🔴 Disabled"
 
     # ========== 汇总状态 ==========
+    # 只有 "Error" 状态才算异常，"Disabled" 是正常状态
     all_components = [db_status, crypto_status, compression_status, oss_status, redis_status]
-    overall_status = "🟢 healthy" if all("🔴" not in s for s in all_components) else "🟡 degraded"
+    overall_status = "🟢 healthy" if all("Error" not in s for s in all_components) else "🟡 degraded"
 
     return {
         "status": overall_status,
