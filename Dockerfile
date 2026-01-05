@@ -43,4 +43,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # --host 0.0.0.0: 监听所有网络接口
 # --port 8000: 端口号
 # --workers 1: 单进程 (SQLite 不支持多进程写入)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# --no-access-log: 禁用访问日志 (使用 loguru 统一记录)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]

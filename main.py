@@ -12,6 +12,8 @@
 """
 
 import asyncio
+import logging
+import sys
 from contextlib import asynccontextmanager
 
 # FastAPI 核心组件
@@ -56,6 +58,45 @@ from app.database import init_db, close_db
 from app.services import clean_expired_task
 # API 路由
 from app.api import router
+
+
+# ==========================================
+# 🪵 拦截 Uvicorn 日志
+# ==========================================
+
+class InterceptHandler(logging.Handler):
+    """拦截标准库日志，转发到 loguru"""
+
+    def emit(self, record):
+        # 使用 loguru 记录
+        from loguru import logger as loguru_logger
+
+        # 获取对应的 loguru 日志级别
+        try:
+            level = loguru_logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # 查找调用者
+        frame, depth = logging.currentframe(), 2
+        while frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        loguru_logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+
+# 配置日志拦截
+logging.root.handlers = [InterceptHandler()]
+logging.root.setLevel(logging.INFO)
+
+# 禁用 Uvicorn/FastAPI 的访问日志
+for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error", "fastapi"]:
+    logging_logger = logging.getLogger(logger_name)
+    logging_logger.handlers = [InterceptHandler()]
+    logging_logger.propagate = False
 
 
 @asynccontextmanager
@@ -265,4 +306,5 @@ if __name__ == "__main__":
         host="0.0.0.0",  # 监听所有网络接口
         port=8000,  # 端口号
         reload=True,  # 开启热重载 (代码变更自动重启)
+        access_log=False,  # 禁用访问日志 (使用 loguru 统一记录)
     )
