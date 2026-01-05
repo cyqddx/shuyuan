@@ -1,0 +1,327 @@
+# 🚀 图床服务 (Tuchuang File Server)
+
+一个**企业级、高安全、高性能**的文件直链托管服务。
+
+专为 JSON 配置文件的分发设计，具备**透明加解密**、**即时压缩**、**哈希去重**、**混合存储**和**全链路监控**能力。
+
+> ✨ **高度模块化**：所有高级特性（加密、压缩、鉴权、Redis、OSS）均为**可选配置**，通过 `.env` 文件按需开启。
+
+---
+
+## 🌟 核心特性
+
+### 1. 🔒 安全特性 [可选]
+
+| 功能 | 说明 |
+|------|------|
+| **静态加密** | Fernet (AES-128) 算法加密存储，服务器沦陷也能保护数据 |
+| **动态解密** | 下载时实时解密，内存流式传输，无明文临时文件 |
+| **内容校验** | 强制解析 JSON 格式，拒绝非法文件 |
+| **API 鉴权** | 支持 API Key 验证，保护上传接口 |
+| **文件大小限制** | 可配置最大文件大小（默认 10MB） |
+| **CORS 控制** | 可配置允许的跨域来源 |
+
+### 2. ⚡ 性能优化 [可选]
+
+| 功能 | 说明 |
+|------|------|
+| **orjson** | 高性能 JSON 解析，比标准库快 5-10 倍 |
+| **Gzip 压缩** | 可配置压缩等级（1-9），节省高达 80% 空间 |
+| **哈希去重** | MD5 指纹识别，实现"秒传"功能 |
+| **aiosqlite** | 全异步数据库，无阻塞操作 |
+| **HTTP 复用** | 全局异步 HTTP 客户端，复用 TCP 连接 |
+
+### 3. 🧠 混合架构 [可选]
+
+| 功能 | 说明 |
+|------|------|
+| **双重存储** | 本地磁盘 + 阿里云 OSS 双写 |
+| **混合限流** | 内存限流 或 Redis 分布式限流 |
+| **生命周期** | 支持 1天/7天/1月/永久，过期自动清理 |
+
+### 4. 📊 可观测性 [默认开启]
+
+| 功能 | 说明 |
+|------|------|
+| **Prometheus** | `/metrics` 端点暴露 QPS、延迟、错误率 |
+| **健康检查** | `/health` 端点返回各组件状态 |
+| **结构化日志** | Loguru 日志，自动轮转、保留 30 天 |
+
+---
+
+## 📂 目录结构
+
+```text
+tuchuang/
+├── app/
+│   ├── __init__.py
+│   ├── api.py              # 🛣️ API 路由 (上传/下载/健康检查/统计)
+│   ├── models.py           # 📦 Pydantic 数据模型
+│   ├── services.py         # ⚙️ 核心业务逻辑 (上传/下载/清理)
+│   ├── database.py         # 🗄️ 异步数据库 (aiosqlite)
+│   ├── exceptions.py       # ⚠️ 自定义异常类
+│   └── core/
+│       ├── config.py       # ⚙️ 配置管理 (pydantic-settings)
+│       ├── crypto.py       # 🔐 加解密引擎 (Fernet)
+│       ├── http_client.py  # 🌐 全局异步 HTTP 客户端
+│       ├── logger.py       # 📝 日志配置 (Loguru)
+│       ├── oss_client.py   # ☁️ 阿里云 OSS 客户端
+│       └── security.py     # 🚦 限流与鉴权
+├── static/
+│   └── favicon.ico         # 🎨 网站图标
+├── uploads/                # 📁 本地存储目录
+├── logs/                   # 📝 运行日志
+├── docs/                   # 📚 文档目录
+│   ├── DEPLOYMENT.md       # 🚀 部署指南
+│   ├── ERROR_CODES.md      # ⚠️ 错误码文档
+│   └── TROUBLESHOOTING.md  # 🔧 故障排查
+├── .env                    # ⚙️ 配置文件
+├── .env.example            # 📄 配置示例
+├── pyproject.toml          # 📦 依赖配置
+├── docker-compose.yml      # 🐳 Docker 编排
+├── Dockerfile              # 🐳 镜像构建
+└── main.py                 # 🚀 应用入口
+```
+
+---
+
+## 📚 文档导航
+
+| 文档 | 说明 |
+|------|------|
+| [部署指南](docs/DEPLOYMENT.md) | 生产环境部署、监控、备份、安全建议 |
+| [错误码文档](docs/ERROR_CODES.md) | HTTP 状态码、业务错误码、错误响应格式 |
+| [故障排查](docs/TROUBLESHOOTING.md) | 常见问题及解决方案 |
+
+---
+
+## 🛠️ 快速部署
+
+### 方式 A: Docker 部署 (推荐)
+
+```bash
+# 1. 复制配置文件
+cp .env.example .env
+
+# 2. 生成加密密钥（如需开启加密）
+docker run --rm python:3.12 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# 3. 编辑 .env，填入必要配置
+# HOST_DOMAIN=http://your-domain:8000
+# ENCRYPTION_KEY=生成的密钥
+
+# 4. 启动服务
+docker-compose up -d --build
+```
+
+### 方式 B: 本地部署 (使用 uv)
+
+```bash
+# 1. 安装 uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. 安装依赖
+uv sync
+
+# 3. 生成加密密钥（如需开启加密）
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# 4. 编辑 .env，填入必要配置
+cp .env.example .env
+
+# 5. 启动服务
+uv run main.py
+```
+
+服务启动后访问：
+- API 文档: http://localhost:8000/docs
+- 健康检查: http://localhost:8000/health
+- Prometheus 指标: http://localhost:8000/metrics
+
+---
+
+## ⚙️ 配置说明 (.env)
+
+所有配置通过 `.env` 文件控制，**必填项缺失时服务无法启动**。
+
+### 基础配置 [必填]
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `HOST_DOMAIN` | 服务对外域名/IP，用于生成直链 | `http://127.0.0.1:8000` |
+
+### 安全配置 [可选]
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `AUTH_ENABLED` | `false` | 是否开启 API Key 鉴权 |
+| `API_KEY` | `secret` | 鉴权密钥 |
+| `ENCRYPTION_ENABLED` | `false` | 是否开启文件加密 |
+| `ENCRYPTION_KEY` | - | Fernet 密钥（开启加密时必填） |
+| `MAX_FILE_SIZE` | `10485760` | 文件大小限制（字节，默认 10MB） |
+| `CORS_ORIGINS` | `*` | CORS 允许来源（逗号分隔） |
+
+### 性能配置 [可选]
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `COMPRESSION_ENABLED` | `false` | 是否开启 Gzip 压缩 |
+| `COMPRESSION_LEVEL` | `6` | 压缩等级（1-9） |
+| `RATE_LIMIT` | `60/minute` | 限流规则 |
+| `REDIS_URL` | - | Redis 地址（留空使用内存限流） |
+
+### OSS 云存储 [可选]
+
+| 变量 | 说明 |
+|------|------|
+| `ENABLE_OSS` | 是否启用 OSS |
+| `OSS_ENDPOINT` | OSS Endpoint（如：oss-cn-hangzhou.aliyuncs.com） |
+| `OSS_BUCKET` | Bucket 名称 |
+| `OSS_AK` | AccessKey ID |
+| `OSS_SK` | AccessKey Secret |
+| `OSS_DOMAIN` | OSS 公网访问域名 |
+
+---
+
+## 🔌 API 接口文档
+
+### 1. 上传文件
+
+```bash
+POST /upload
+```
+
+**请求参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file` | File | 是 | JSON 文件 |
+| `time_limit` | String | 否 | 有效期：`1d` / `7d` / `1m` / `perm` |
+
+**请求头（鉴权开启时）：**
+```
+x-api-key: your-secret-key
+```
+
+**响应示例：**
+```json
+{
+  "code": 200,
+  "msg": "✅ 上传成功",
+  "data": {
+    "url": "http://127.0.0.1:8000/f/a1b2c3d4",
+    "filename": "config.json",
+    "expiry": "永久",
+    "is_duplicate": false
+  }
+}
+```
+
+### 2. 获取文件
+
+```bash
+GET /f/{file_id}
+```
+
+自动处理：`读取磁盘 -> 解密 (AES) -> 解压 (Gzip) -> 返回 JSON`
+
+### 3. 健康检查
+
+```bash
+GET /health
+```
+
+**响应示例：**
+```json
+{
+  "status": "🟢 健康",
+  "version": "1.0.0",
+  "components": {
+    "database": "🟢 正常",
+    "encryption": "🔴 未启用",
+    "compression": "🟢 已启用",
+    "oss": "🔴 未启用",
+    "redis": "🔴 未启用"
+  }
+}
+```
+
+### 4. 系统统计
+
+```bash
+GET /admin/stats
+```
+
+返回文件总数和系统配置状态。
+
+### 5. Prometheus 指标
+
+```bash
+GET /metrics
+```
+
+Prometheus 格式的监控指标。
+
+---
+
+## 📱 Legado (阅读) 适配
+
+配置 JSON：
+
+```json
+{
+  "summary": "图床服务",
+  "uploadUrl": "http://your-domain:8000/upload,{\"method\":\"POST\",\"type\":\"multipart/form-data\",\"body\":{\"file\":\"fileRequest\",\"time_limit\":\"perm\"},\"headers\":{\"x-api-key\":\"your-key\"}}",
+  "downloadUrlRule": "$.data.url",
+  "compress": false
+}
+```
+
+**说明：**
+- 修改 `your-domain` 为实际地址
+- 如开启鉴权，修改 `x-api-key` 为实际密钥
+- `time_limit`: `1d`(1天) / `7d`(7天) / `1m`(1月) / `perm`(永久)
+
+---
+
+## 🏗️ 工作流程
+
+### 写入流程
+
+```
+接收文件
+  → 大小检查
+  → 后缀名校验
+  → JSON 校验与压缩
+  → MD5 哈希计算
+  → [去重检查 → 秒传]
+  → Gzip 压缩 (可选)
+  → Fernet 加密 (可选)
+  → 本地存储
+  → OSS 上传 (可选)
+  → 写入元数据
+```
+
+### 读取流程
+
+```
+查询数据库
+  → 读取本地文件
+  → Fernet 解密 (如加密)
+  → Gzip 解压 (如压缩)
+  → 返回 JSON
+```
+
+---
+
+## 📝 维护
+
+- **自动清理**: 后台任务每小时清理过期文件
+- **日志轮转**: `logs/` 目录，按天切割，保留 30 天
+- **优雅关闭**: 支持信号处理，完成后台任务再退出
+
+---
+
+## 📄 许可证
+
+MIT License
