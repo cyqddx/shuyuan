@@ -24,7 +24,7 @@ services:
     # 数据卷挂载 (持久化数据)
     volumes:
       - ./uploads:/app/uploads          # 本地存储目录
-      - ./files.db:/app/files.db        # SQLite 数据库
+      - tuchuang_db:/app/data           # 数据目录（使用命名卷避免文件/目录冲突）
       - ./logs:/app/logs                # 日志目录
 
     # 环境变量 (也可通过 .env 文件配置)
@@ -116,5 +116,7 @@ services:
   #     - redis_data:/data
 
 # 持久化数据卷
-# volumes:
-#   redis_data:
+volumes:
+  tuchuang_db:                    # 数据库命名卷
+    driver: local
+  # redis_data:                   # Redis 卷（启用时取消注释）

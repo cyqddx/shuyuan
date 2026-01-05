@@ -26,12 +26,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 项目根目录 (当前文件向上三级)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# 自动创建必要的目录
+# 数据库路径：优先使用环境变量，默认使用 data 目录（Docker 命名卷）
+DB_PATH = Path(os.getenv("DB_PATH", PROJECT_ROOT / "data" / "files.db"))
+# 本地存储目录
 UPLOAD_DIR = PROJECT_ROOT / "uploads"
-DB_FILE = PROJECT_ROOT / "files.db"
+# 日志目录
 LOG_DIR = PROJECT_ROOT / "logs"
 
-# 确保目录存在
+# 确保 data 目录存在（如果使用本地路径）
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# 自动创建必要的目录
 UPLOAD_DIR.mkdir(exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 
@@ -284,7 +289,7 @@ class Settings(BaseSettings):
     @property
     def DB_FILE(self) -> str:
         """数据库文件路径"""
-        return str(DB_FILE)
+        return str(DB_PATH)
 
     @property
     def UPLOAD_DIR(self) -> str:
@@ -416,6 +421,6 @@ __all__ = [
     "Settings",         # 配置类 (用于类型注解)
     "PROJECT_ROOT",     # 项目根目录
     "UPLOAD_DIR",       # 上传目录
-    "DB_FILE",          # 数据库文件路径
+    "DB_PATH",          # 数据库文件路径
     "LOG_DIR",          # 日志目录
 ]

@@ -26,8 +26,11 @@ COPY app/ ./app/
 COPY main.py ./
 COPY static/ ./static/
 
-# 创建必要的目录
-RUN mkdir -p uploads logs
+# 创建必要的目录和空数据库文件
+# 数据目录用于命名卷挂载，避免文件/目录类型冲突
+RUN mkdir -p uploads logs data && \
+    touch data/files.db && \
+    chmod 666 data/files.db uploads logs
 
 # 暴露端口
 EXPOSE 8000

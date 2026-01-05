@@ -95,7 +95,16 @@ docker info | grep -A5 "Registry Mirrors"
 3. 确认 `.env` 配置正确
 
 ### 数据持久化
-确保以下目录和文件正确挂载：
-- `./uploads` → 上传文件存储
-- `./files.db` → SQLite 数据库
-- `./logs` → 应用日志
+确保以下目录和卷正确挂载：
+- `./uploads` → 上传文件存储（绑定挂载）
+- `tuchuang_db` → SQLite 数据库（命名卷，存放在 `/app/data/`）
+- `./logs` → 应用日志（绑定挂载）
+
+**数据库备份：**
+```bash
+# 从命名卷复制数据库到本地
+docker cp tuchuang_server:/app/data/files.db ./files_backup.db
+
+# 恢复数据库
+docker cp ./files_backup.db tuchuang_server:/app/data/files.db
+```
