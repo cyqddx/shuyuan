@@ -7,19 +7,27 @@
     - 文件上传处理: 校验 -> 查重 -> 压缩 -> 加密 -> 存储
     - 文件读取处理: 读取 -> 解密 -> 解压 -> 返回
     - 后台清理任务: 定期清理过期文件
+    - TTL 缓存: 文件元数据缓存（5分钟过期）
 数据处理流程:
-    写入: 接收文件 -> JSON 校验 -> 去重检查 -> 压缩 -> 加密 -> 存储
+    写入: 接收文件 -> JSON 校验 -> BLAKE2b 哈希 -> 去重检查 -> 压缩 -> 加密 -> 存储
     读取: 读取文件 -> 解密 -> 解压 -> 返回 JSON
+
+使用的 Python 标准库模块:
+    - pathlib.Path: 现代路径操作
+    - secrets: 安全随机数生成（文件 ID）
+    - hashlib.blake2b: 高速哈希计算
+    - functools.cached_property: 延迟初始化（config.py）
+    - contextlib.asynccontextmanager: 异步上下文管理（database.py）
 
 """
 
 # ========== 标准库导入 ==========
-import os  # 路径操作
-import uuid  # 唯一 ID 生成
 import hashlib  # 哈希计算
 import gzip  # Gzip 压缩
+import secrets  # 安全随机数生成
 import datetime  # 时间处理
 import asyncio  # 异步任务
+from pathlib import Path  # 路径操作
 
 # ========== 第三方库导入 ==========
 import anyio  # 异步文件操作
@@ -27,6 +35,7 @@ import orjson  # 高性能 JSON 处理
 from fastapi import UploadFile, HTTPException
 from dataclasses import dataclass
 from typing import Any
+from cachetools import TTLCache  # TTL 缓存
 
 # ========== 内部模块导入 ==========
 from app.core.config import Config
@@ -93,6 +102,27 @@ def _validate_json_structure(obj: Any, depth: int = 0, config: JSONValidationCon
 
 
 # ==========================================
+# 💾 TTL 缓存
+# ==========================================
+
+# 全局缓存：文件元数据（5分钟过期）
+_metadata_cache: TTLCache = TTLCache(maxsize=2048, ttl=300)
+
+# 全局缓存：哈希查重结果（1分钟过期）
+_hash_cache: TTLCache = TTLCache(maxsize=4096, ttl=60)
+
+
+def invalidate_file_cache(file_id: str) -> None:
+    """
+    🗑️ 清除文件缓存
+
+    Args:
+        file_id: 文件 ID
+    """
+    _metadata_cache.pop(file_id, None)
+
+
+# ==========================================
 # 🔧 工具函数
 # ==========================================
 
@@ -139,23 +169,29 @@ def decompress_data(data: bytes) -> bytes:
     return data
 
 
-def calculate_hash(content: bytes) -> str:
+def calculate_hash(content: bytes, use_blake2b: bool = True) -> tuple[str, str]:
     """
     🔐 计算数据哈希
 
-    使用 MD5 算法计算内容的哈希值，用于文件去重
+    使用 blake2b 或 MD5 算法计算内容的哈希值，用于文件去重
 
     Args:
         content: 待计算的字节数据
+        use_blake2b: 是否使用 blake2b（默认 True），False 则使用 MD5
 
     Returns:
-        str: 32 位十六进制 MD5 哈希值
+        tuple[str, str]: (哈希值, 哈希算法标识 "blake2b" 或 "md5")
 
     注意:
-        - MD5 虽然不安全用于密码，但用于文件去重足够
+        - blake2b 比 MD5 更快且更安全
+        - digest_size=16 生成 128 位（32 位十六进制），与 MD5 长度相同
         - 相同内容必然产生相同哈希，实现"秒传"功能
     """
-    return hashlib.md5(content).hexdigest()
+    if use_blake2b:
+        # blake2b digest_size=16 生成 128 位（32 位十六进制），与 MD5 长度一致
+        return hashlib.blake2b(content, digest_size=16).hexdigest(), "blake2b"
+    else:
+        return hashlib.md5(content).hexdigest(), "md5"
 
 
 def validate_and_minify(content: bytes) -> bytes:
@@ -277,7 +313,7 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
     log.info(f"📦 接收文件: {file.filename} ({file_size} 字节)")
 
     # ========== 2. 后缀名校验 ==========
-    ext = os.path.splitext(file.filename)[1].lower()
+    ext = Path(file.filename).suffix.lower()
     if ext not in Config.ALLOWED_EXTENSIONS:
         log.warning(f"🚫 不允许的文件类型: {ext}")
         raise HTTPException(
@@ -293,11 +329,15 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
         raise
 
     # ========== 4. 哈希查重 ==========
-    file_hash = calculate_hash(minified_content)
+    file_hash, hash_algorithm = calculate_hash(minified_content, use_blake2b=True)
 
     conn = await get_db_connection()
-    # 查询是否存在相同哈希的文件
-    cursor = await conn.execute("SELECT id, oss_path FROM files WHERE file_hash = ?", (file_hash,))
+    # 查询是否存在相同哈希的文件（同时支持 blake2b 和 md5）
+    cursor = await conn.execute("""
+        SELECT id, oss_path FROM files
+        WHERE (file_hash = ? AND hash_algorithm = 'blake2b')
+           OR (file_hash = ? AND hash_algorithm = 'md5')
+    """, (file_hash, file_hash))
     existing = await cursor.fetchone()
 
     if existing:
@@ -330,8 +370,8 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
     final_content = CryptoEngine.encrypt(processed_content)
 
     # ========== 6. 文件存储 ==========
-    # 生成唯一的文件 ID (8 位十六进制)
-    file_id = uuid.uuid4().hex[:8]
+    # 生成唯一的文件 ID (8 位十六进制，使用安全的随机数)
+    file_id = secrets.token_hex(4)
 
     # 确定存储文件名
     # 加密/压缩模式下使用 .bin 后缀，避免误导
@@ -341,8 +381,8 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
         save_filename = f"{file_id}{ext}"
 
     # 6.1 本地存储
-    local_path = os.path.join(Config.UPLOAD_DIR, save_filename)
-    async with await anyio.open_file(local_path, 'wb') as f:
+    local_path = Path(Config.UPLOAD_DIR) / save_filename
+    async with await anyio.open_file(str(local_path), 'wb') as f:
         await f.write(final_content)
     log.info(f"💾 本地存储完成: {save_filename}")
 
@@ -371,9 +411,9 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
 
     try:
         await conn.execute("""
-            INSERT INTO files (id, file_hash, filename, local_path, oss_path, expire_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (file_id, file_hash, file.filename, save_filename, oss_url, expire_at))
+            INSERT INTO files (id, file_hash, hash_algorithm, filename, local_path, oss_path, expire_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (file_id, file_hash, hash_algorithm, file.filename, save_filename, oss_url, expire_at))
         await conn.commit()
     except Exception as e:
         log.error(f"💥 数据库写入失败: {e}")
@@ -417,27 +457,35 @@ async def retrieve_file_content(file_id: str):
     """
 
     # ========== 1. 查询文件元数据 ==========
-    conn = await get_db_connection()
-    cursor = await conn.execute("SELECT local_path, filename FROM files WHERE id = ?", (file_id,))
-    row = await cursor.fetchone()
-    await conn.close()
+    # 先检查缓存
+    cached_metadata = _metadata_cache.get(file_id)
+    if cached_metadata:
+        local_path = Path(Config.UPLOAD_DIR) / cached_metadata["local_path"]
+        original_name = cached_metadata["filename"]
+    else:
+        conn = await get_db_connection()
+        cursor = await conn.execute("SELECT local_path, filename FROM files WHERE id = ?", (file_id,))
+        row = await cursor.fetchone()
+        await conn.close()
 
-    if not row:
-        # 文件不存在
-        log.warning(f"🔍 文件不存在: {file_id}")
-        return None, None
+        if not row:
+            # 文件不存在
+            log.warning(f"🔍 文件不存在: {file_id}")
+            return None, None
 
-    local_path = os.path.join(Config.UPLOAD_DIR, row['local_path'])
-    original_name = row['filename']
+        local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+        original_name = row['filename']
+        # 写入缓存
+        _metadata_cache[file_id] = {"local_path": row['local_path'], "filename": original_name}
 
     # ========== 2. 检查文件是否存在 ==========
-    if not os.path.exists(local_path):
+    if not local_path.exists():
         log.warning(f"🔍 文件已丢失: {local_path}")
         return None, None
 
     # ========== 3. 读取文件内容 ==========
     try:
-        async with await anyio.open_file(local_path, 'rb') as f:
+        async with await anyio.open_file(str(local_path), 'rb') as f:
             content = await f.read()
     except Exception as e:
         log.error(f"💥 文件读取失败 {file_id}: {e}")
@@ -514,16 +562,17 @@ async def clean_expired_task():
 
                 for row in rows:
                     file_ids.append(row['id'])
-                    local_full = os.path.join(Config.UPLOAD_DIR, row['local_path'])
-                    to_delete_local.append(local_full)
+                    local_full = Path(Config.UPLOAD_DIR) / row['local_path']
+                    to_delete_local.append(str(local_full))
                     if row['oss_path']:
                         to_delete_oss.append(row['oss_path'])
 
                 # ========== 3. 并发删除本地文件 ==========
                 async def delete_local(path: str):
-                    if os.path.exists(path):
+                    path_obj = Path(path)
+                    if path_obj.exists():
                         try:
-                            await asyncio.to_thread(os.remove, path)
+                            await asyncio.to_thread(path_obj.unlink)
                             return path, True
                         except OSError as e:
                             log.error(f"⚠️ 删除本地文件失败 {path}: {e}")
@@ -556,6 +605,10 @@ async def clean_expired_task():
                 )
                 await conn.commit()
                 await conn.close()
+
+                # 清除缓存
+                for file_id in file_ids:
+                    invalidate_file_cache(file_id)
 
                 log.info(f"✅ 清理任务完成，共清理 {len(file_ids)} 个文件")
 

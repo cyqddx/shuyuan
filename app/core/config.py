@@ -12,11 +12,15 @@
     - 必填项缺失则服务无法启动
     - 使用 pydantic 进行类型验证
 
+使用的 Python 标准库模块:
+    - functools.cached_property: 延迟计算并缓存 OSS_CONFIG
+
 """
 
 import os
 from pathlib import Path
 from typing import Literal
+from functools import cached_property
 
 # Pydantic 配置管理
 from pydantic import Field, field_validator, model_validator
@@ -369,10 +373,10 @@ class Settings(BaseSettings):
     # 🧩 辅助属性
     # ==========================================
 
-    @property
+    @cached_property
     def OSS_CONFIG(self) -> dict:
         """
-        ☁️ 获取 OSS 配置字典
+        ☁️ 获取 OSS 配置字典（延迟计算并缓存）
 
         Returns:
             dict: OSS 配置字典，包含 endpoint, bucket_name, access_key, secret_key, base_url

@@ -54,16 +54,18 @@ class TestDataProcessing:
     def test_hash_calculation(self):
         """测试哈希计算"""
         data = b"consistent data"
-        hash1 = calculate_hash(data)
-        hash2 = calculate_hash(data)
+        hash1, algo1 = calculate_hash(data, use_blake2b=True)
+        hash2, algo2 = calculate_hash(data, use_blake2b=True)
 
         assert hash1 == hash2
-        assert len(hash1) == 32  # MD5 输出长度
+        assert algo1 == "blake2b"
+        assert algo2 == "blake2b"
+        assert len(hash1) == 32  # blake2b digest_size=16 输出长度
 
     def test_hash_different_data(self):
         """测试不同数据产生不同哈希"""
-        hash1 = calculate_hash(b"data1")
-        hash2 = calculate_hash(b"data2")
+        hash1, _ = calculate_hash(b"data1", use_blake2b=True)
+        hash2, _ = calculate_hash(b"data2", use_blake2b=True)
 
         assert hash1 != hash2
 

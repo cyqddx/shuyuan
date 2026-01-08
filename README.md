@@ -27,9 +27,11 @@
 |------|------|
 | **orjson** | 高性能 JSON 解析，比标准库快 5-10 倍 |
 | **Gzip 压缩** | 可配置压缩等级（1-9），节省高达 80% 空间 |
-| **哈希去重** | MD5 指纹识别，实现"秒传"功能 |
+| **哈希去重** | BLAKE2b 指纹识别（比 MD5 更快更安全），实现"秒传"功能 |
+| **TTL 缓存** | 文件元数据缓存（5分钟过期），减少数据库查询 |
 | **aiosqlite** | 全异步数据库，无阻塞操作 |
 | **HTTP 复用** | 全局异步 HTTP 客户端，复用 TCP 连接 |
+| **安全随机 ID** | 使用 `secrets.token_hex` 生成文件 ID，更安全 |
 
 ### 3. 🧠 混合架构 [可选]
 
@@ -46,6 +48,21 @@
 | **Prometheus** | `/metrics` 端点暴露 QPS、延迟、错误率 |
 | **健康检查** | `/health` 端点返回各组件状态 |
 | **结构化日志** | Loguru 日志，自动轮转、保留 30 天 |
+
+### 5. 🔧 技术栈
+
+| 组件 | 技术 |
+|------|------|
+| **Web 框架** | FastAPI + Uvicorn |
+| **数据库** | SQLite (aiosqlite 异步) |
+| **JSON 处理** | orjson |
+| **加密** | cryptography (Fernet AES-128) |
+| **缓存** | cachetools (TTL) |
+| **哈希** | hashlib.blake2b |
+| **随机数** | secrets (密码学安全) |
+| **路径操作** | pathlib |
+| **日志** | loguru |
+| **监控** | prometheus-fastapi-instrumentator |
 
 ---
 
@@ -293,7 +310,7 @@ Prometheus 格式的监控指标。
   → 大小检查
   → 后缀名校验
   → JSON 校验与压缩
-  → MD5 哈希计算
+  → BLAKE2b 哈希计算（兼容旧 MD5）
   → [去重检查 → 秒传]
   → Gzip 压缩 (可选)
   → Fernet 加密 (可选)

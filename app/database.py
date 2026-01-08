@@ -7,8 +7,12 @@
     - 异步 SQLite 数据库连接管理
     - 表结构初始化
     - 数据库连接池 (通过 aiosqlite)
+    - 自动迁移: 兼容旧数据库，自动添加 hash_algorithm 字段
 数据表:
-    - files: 文件元数据表
+    - files: 文件元数据表 (id, file_hash, hash_algorithm, filename, local_path, oss_path, expire_at, created_at)
+
+使用的 Python 标准库模块:
+    - contextlib.asynccontextmanager: 异步上下文管理器，用于连接池
 
 """
 
@@ -145,7 +149,8 @@ async def init_db():
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 id TEXT PRIMARY KEY,         -- 文件唯一 ID (8 位十六进制)
-                file_hash TEXT,              -- 内容 MD5 哈希 (用于去重)
+                file_hash TEXT,              -- 内容哈希 (用于去重)
+                hash_algorithm TEXT DEFAULT 'md5',  -- 哈希算法 (blake2b 或 md5)
                 filename TEXT,               -- 原始文件名
                 local_path TEXT,             -- 本地存储路径
                 oss_path TEXT,               -- OSS 访问 URL (可选)
@@ -154,17 +159,38 @@ async def init_db():
             )
         """)
 
+        # ========== 迁移：添加 hash_algorithm 字段（兼容旧数据库）==========
+        # 检查字段是否已存在
+        cursor = await conn.execute("PRAGMA table_info(files)")
+        columns = await cursor.fetchall()
+        column_names = [col["name"] for col in columns]
+
+        if "hash_algorithm" not in column_names:
+            log.info("🔄 正在迁移数据库：添加 hash_algorithm 字段...")
+            await conn.execute("ALTER TABLE files ADD COLUMN hash_algorithm TEXT DEFAULT 'md5'")
+            # 为现有记录设置默认值
+            await conn.execute("UPDATE files SET hash_algorithm = 'md5' WHERE hash_algorithm IS NULL")
+            log.info("✅ 数据库迁移完成")
+        else:
+            log.info("ℹ️ hash_algorithm 字段已存在，跳过迁移")
+
         # ========== 创建哈希索引 (加速去重查询) ==========
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_hash
             ON files (file_hash)
         """)
 
+        # ========== 创建哈希算法索引 ==========
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_hash_algorithm
+            ON files (hash_algorithm)
+        """)
+
         # ========== 创建哈希唯一索引 (防止并发重复) ==========
         # 注意: SQLite 中 UNIQUE INDEX 会自动处理并发插入冲突
         await conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_hash_unique
-            ON files (file_hash)
+            ON files (file_hash, hash_algorithm)
         """)
 
         # 提交更改
