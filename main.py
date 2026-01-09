@@ -55,7 +55,7 @@ from app.core.oss_client import OSSClient
 # 数据库初始化
 from app.database import init_db, close_db
 # 后台清理任务
-from app.services import clean_expired_task
+from app.services import clean_expired_task, sync_missing_files_task
 # API 路由
 from app.api import router
 
@@ -161,7 +161,11 @@ async def lifespan(app: FastAPI):
 
     # 启动后台清理任务 (每小时清理一次过期文件)
     log.info("🧹 正在启动后台清理任务...")
-    task = asyncio.create_task(clean_expired_task())
+    cleanup_task = asyncio.create_task(clean_expired_task())
+
+    # 启动文件同步任务 (每30秒同步一次)
+    log.info("👁️ 正在启动文件同步任务...")
+    sync_task = asyncio.create_task(sync_missing_files_task())
 
     log.info("✅ 图床服务启动完成！")
 
@@ -178,15 +182,11 @@ async def lifespan(app: FastAPI):
     log.info("🗄️ 数据库连接池已关闭")
 
     # 优雅关闭后台任务 (等待最多 5 秒)
-    try:
-        await asyncio.wait_for(task, timeout=5)
-        log.info("✅ 后台清理任务已正常停止")
-    except asyncio.TimeoutError:
-        # 超时则强制取消
-        log.warning("⏰ 后台任务关闭超时，强制取消")
-        task.cancel()
-    except asyncio.CancelledError:
-        log.info("✅ 后台清理任务已取消")
+    tasks = [cleanup_task, sync_task]
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    log.info("✅ 后台任务已停止")
 
     # 关闭 HTTP 客户端
     await http_client.stop()

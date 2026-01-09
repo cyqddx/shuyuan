@@ -86,6 +86,44 @@ services:
     #       memory: 256M
 
   # ==========================================
+  # 🎨 管理后台前端
+  # ==========================================
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: tuchuang_admin
+    restart: unless-stopped
+
+    # 端口映射
+    ports:
+      - "3000:3000"
+
+    # 环境变量
+    environment:
+      - NEXT_PUBLIC_API_URL=http://tuchuang:8000
+      - NEXT_PUBLIC_API_KEY=${API_KEY:-}
+
+    # 依赖后端服务
+    depends_on:
+      - tuchuang
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================
   # 📊 Prometheus (可选监控)
   # ==========================================
   # 取消注释以启用 Prometheus 监控

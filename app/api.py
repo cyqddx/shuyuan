@@ -15,18 +15,36 @@ API 端点:
 
 """
 
-from fastapi import APIRouter, UploadFile, File, Form, Request, Depends, Response, HTTPException
-from typing import Dict, Any
+from fastapi import APIRouter, UploadFile, File, Form, Request, Depends, Response, HTTPException, Query, Security
+from typing import Dict, Any, Optional, List
+from pydantic import BaseModel
 
 # ========== 内部模块导入 ==========
 # 数据模型
-from app.models import UploadResponse, TimeLimit
+from app.models import (
+    UploadResponse,
+    TimeLimit,
+    ConfigUpdateRequest,
+)
 # 业务逻辑
-from app.services import process_file_upload, retrieve_file_content
+from app.services import (
+    process_file_upload,
+    retrieve_file_content,
+    get_file_list,
+    get_file_detail,
+    delete_file,
+    batch_delete_files,
+    get_storage_stats,
+    get_upload_trend,
+    get_expiring_files,
+    manual_cleanup,
+)
 # 安全模块
 from app.core.security import limiter, verify_api_key
 # 应用配置
 from app.core.config import Config
+# 配置管理
+from app.core.config_manager import ConfigManager, CATEGORIES
 # 数据库
 from app.database import get_db_connection
 # 日志模块
@@ -56,6 +74,7 @@ router = APIRouter(
 @limiter.limit(Config.rate_limit)  # 应用限流
 async def upload_endpoint(
     request: Request,                           # 请求对象 (用于限流)
+    _: bool = Security(verify_api_key),         # 鉴权检查
     file: UploadFile = File(...),               # 上传的文件 (必填)
     time_limit: TimeLimit = Form(TimeLimit.PERMANENT)  # 有效期 (默认永久)
 ):
@@ -297,6 +316,179 @@ async def admin_stats():
             "redis": bool(Config.REDIS_URL)
         }
     }
+
+
+# ==========================================
+# 📋 管理后台 API
+# ==========================================
+
+class BatchDeleteRequest(BaseModel):
+    """批量删除请求"""
+    file_ids: List[str]
+
+
+@router.get("/admin/files", summary="文件列表", description="获取文件列表（分页、搜索、排序）")
+async def admin_files_list(
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页大小"),
+    search: str = Query("", description="搜索关键词"),
+    sort: str = Query("created_at", description="排序字段"),
+    order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向")
+):
+    """获取文件列表"""
+    return await get_file_list(page, page_size, search, sort, order)
+
+
+@router.get("/admin/files/{file_id}", summary="文件详情", description="获取文件详细信息")
+async def admin_file_detail(file_id: str):
+    """获取文件详情"""
+    result = await get_file_detail(file_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return result
+
+
+@router.delete("/admin/files/{file_id}", summary="删除文件", description="删除指定文件")
+async def admin_delete_file(file_id: str):
+    """删除文件"""
+    result = await delete_file(file_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return {"message": "删除成功"}
+
+
+@router.delete("/admin/files/batch", summary="批量删除", description="批量删除文件")
+async def admin_batch_delete(request: BatchDeleteRequest):
+    """批量删除文件"""
+    result = await batch_delete_files(request.file_ids)
+    return result
+
+
+@router.get("/admin/stats/storage", summary="存储统计", description="获取存储使用统计")
+async def admin_storage_stats():
+    """获取存储统计"""
+    return await get_storage_stats()
+
+
+@router.get("/admin/stats/trend", summary="上传趋势", description="获取上传趋势数据")
+async def admin_upload_trend(days: int = Query(30, ge=1, le=90, description="统计天数")):
+    """获取上传趋势"""
+    return await get_upload_trend(days)
+
+
+@router.get("/admin/stats/expiring", summary="即将过期", description="获取即将过期的文件")
+async def admin_expiring_files(days: int = Query(7, ge=1, le=30, description="天数范围")):
+    """获取即将过期的文件"""
+    return await get_expiring_files(days)
+
+
+@router.post("/admin/cleanup", summary="清理过期", description="手动清理过期文件")
+async def admin_cleanup():
+    """手动清理过期文件"""
+    return await manual_cleanup()
+
+
+# ==========================================
+# ⚙️ 配置管理 API
+# ==========================================
+
+@router.get("/admin/config", summary="获取配置", description="获取系统所有配置项")
+async def admin_get_config():
+    """
+    ⚙️ 获取系统配置
+
+    返回所有可配置的配置项及其当前值
+
+    Returns:
+        ConfigListResponse: 按分类组织的配置项列表
+    """
+    manager = ConfigManager()
+    items = manager.get_config_items()
+
+    # 按分类组织
+    category_items: dict[str, list] = {cat: [] for cat in CATEGORIES}
+    for item in items:
+        if item.category not in category_items:
+            category_items[item.category] = []
+        category_items[item.category].append(item.model_dump())
+
+    from app.models import ConfigCategory
+    categories = [
+        ConfigCategory(name=cat, items=category_items.get(cat, []))
+        for cat in CATEGORIES
+        if category_items.get(cat)
+    ]
+
+    return {
+        "categories": [c.model_dump() for c in categories],
+        "categories_order": CATEGORIES
+    }
+
+
+@router.post("/admin/config/generate/{key_type}", summary="生成密钥", description="生成指定类型的密钥")
+async def admin_generate_key(key_type: str):
+    """
+    🔑 生成密钥
+
+    根据类型生成对应的密钥值
+
+    Args:
+        key_type: 密钥类型 (api_key, encryption_key)
+
+    Returns:
+        dict: 包含生成的密钥值
+    """
+    import secrets
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        Fernet = None
+
+    if key_type == "api_key":
+        # 生成随机 API Key
+        generated_key = secrets.token_urlsafe(32)
+        return {"key": generated_key}
+    elif key_type == "encryption_key":
+        # 生成 Fernet 加密密钥
+        if Fernet is None:
+            return {"error": "cryptography 库未安装"}
+        generated_key = Fernet.generate_key().decode()
+        return {"key": generated_key}
+    else:
+        return {"error": f"不支持的密钥类型: {key_type}"}
+
+
+@router.post("/admin/config", summary="更新配置", description="更新系统配置并自动重启服务")
+async def admin_update_config(request: ConfigUpdateRequest):
+    """
+    ⚙️ 更新系统配置
+
+    更新配置项并写入 .env 文件，然后自动重启服务使配置生效
+
+    Args:
+        request: 包含更新配置的请求体
+
+    Returns:
+        ConfigUpdateResponse: 更新结果和重启状态
+    """
+    from app.models import ConfigUpdateResponse
+
+    manager = ConfigManager()
+
+    # 更新配置
+    success, message = manager.update_config(request.updates)
+
+    if not success:
+        return ConfigUpdateResponse(success=False, message=message, restarting=False)
+
+    # 重启服务
+    restart_success, restart_message = manager.restart_service()
+
+    return ConfigUpdateResponse(
+        success=True,
+        message=f"{message}，{restart_message}",
+        restarting=restart_success
+    )
 
 
 # ==========================================

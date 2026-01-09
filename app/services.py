@@ -480,7 +480,13 @@ async def retrieve_file_content(file_id: str):
 
     # ========== 2. 检查文件是否存在 ==========
     if not local_path.exists():
-        log.warning(f"🔍 文件已丢失: {local_path}")
+        log.warning(f"🔍 文件已丢失: {local_path}，清理数据库记录")
+        # 文件丢失，清理数据库记录
+        conn = await get_db_connection()
+        await conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+        await conn.commit()
+        await conn.close()
+        invalidate_file_cache(file_id)
         return None, None
 
     # ========== 3. 读取文件内容 ==========
@@ -623,3 +629,501 @@ async def clean_expired_task():
         # ========== 7. 等待下次执行 ==========
         # 每小时执行一次 (3600 秒)
         await asyncio.sleep(3600)
+
+
+# ==========================================
+# 📋 管理后台业务逻辑
+# ==========================================
+
+async def get_file_list(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = "",
+    sort: str = "created_at",
+    order: str = "desc"
+) -> dict:
+    """
+    📋 获取文件列表
+
+    Args:
+        page: 页码（从 1 开始）
+        page_size: 每页大小
+        search: 搜索关键词（文件名或 ID）
+        sort: 排序字段
+        order: 排序方向（asc/desc）
+
+    Returns:
+        dict: 包含 items, total, page, page_size, total_pages 的字典
+    """
+    conn = await get_db_connection()
+
+    # 构建 WHERE 条件
+    where_conditions = []
+    params = []
+    if search:
+        where_conditions.append("(filename LIKE ? OR id LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+
+    # 获取总数
+    count_query = f"SELECT COUNT(*) as count FROM files WHERE {where_clause}"
+    cursor = await conn.execute(count_query, params)
+    total_row = await cursor.fetchone()
+    total = total_row['count'] if total_row else 0
+
+    # 计算偏移量
+    offset = (page - 1) * page_size
+
+    # 构建排序
+    order_clause = f"{sort} {order.upper()}"
+
+    # 获取文件列表
+    now = datetime.datetime.now()
+    list_query = f"""
+        SELECT id, filename, file_hash, local_path, oss_path, expire_at, created_at
+        FROM files
+        WHERE {where_clause}
+        ORDER BY {order_clause}
+        LIMIT ? OFFSET ?
+    """
+    cursor = await conn.execute(list_query, params + [page_size, offset])
+    rows = await cursor.fetchall()
+    await conn.close()
+
+    # 构建结果
+    items = []
+    for row in rows:
+        # 获取文件大小
+        file_size = 0
+        local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+        if local_path.exists():
+            file_size = local_path.stat().st_size
+
+        # 判断是否过期 (SQLite 返回的是字符串，需要转换为 datetime)
+        is_expired = False
+        if row['expire_at']:
+            expire_at = datetime.datetime.fromisoformat(row['expire_at']) if isinstance(row['expire_at'], str) else row['expire_at']
+            is_expired = expire_at < now
+
+        items.append({
+            "id": row['id'],
+            "filename": row['filename'],
+            "file_hash": row['file_hash'],
+            "local_path": row['local_path'],
+            "oss_path": row['oss_path'],
+            # SQLite 已返回 ISO 格式字符串，无需调用 isoformat()
+            "expire_at": row['expire_at'],
+            "created_at": row['created_at'],
+            "file_size": file_size,
+            "is_expired": is_expired
+        })
+
+    total_pages = (total + page_size - 1) // page_size
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }
+
+
+async def get_file_detail(file_id: str) -> dict | None:
+    """
+    📄 获取文件详情
+
+    Args:
+        file_id: 文件 ID
+
+    Returns:
+        dict | None: 文件详情，不存在时返回 None
+    """
+    conn = await get_db_connection()
+    cursor = await conn.execute(
+        "SELECT * FROM files WHERE id = ?",
+        (file_id,)
+    )
+    row = await cursor.fetchone()
+    await conn.close()
+
+    if not row:
+        return None
+
+    # 获取文件大小
+    file_size = 0
+    local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+    if local_path.exists():
+        file_size = local_path.stat().st_size
+
+    # 获取文件内容
+    content = None
+    content_bytes, filename = await retrieve_file_content(file_id)
+    if content_bytes:
+        try:
+            content = content_bytes.decode('utf-8')
+        except:
+            content = None
+
+    return {
+        "id": row['id'],
+        "filename": row['filename'],
+        "file_hash": row['file_hash'],
+        "hash_algorithm": row['hash_algorithm'],
+        "local_path": row['local_path'],
+        "oss_path": row['oss_path'],
+        # SQLite 已返回 ISO 格式字符串，无需调用 isoformat()
+        "expire_at": row['expire_at'],
+        "created_at": row['created_at'],
+        "file_size": file_size,
+        "content": content
+    }
+
+
+async def delete_file(file_id: str) -> bool:
+    """
+    🗑️ 删除文件
+
+    Args:
+        file_id: 文件 ID
+
+    Returns:
+        bool: 是否删除成功
+    """
+    conn = await get_db_connection()
+
+    # 获取文件信息
+    cursor = await conn.execute("SELECT local_path, oss_path FROM files WHERE id = ?", (file_id,))
+    row = await cursor.fetchone()
+
+    if not row:
+        await conn.close()
+        return False
+
+    # 删除本地文件
+    local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+    if local_path.exists():
+        try:
+            await asyncio.to_thread(local_path.unlink)
+        except Exception as e:
+            log.error(f"删除本地文件失败 {local_path}: {e}")
+
+    # 删除 OSS 文件
+    if row['oss_path'] and Config.ENABLE_OSS:
+        from app.core.oss_client import OSSClient
+        try:
+            await OSSClient.delete(row['oss_path'])
+        except Exception as e:
+            log.error(f"删除 OSS 文件失败 {row['oss_path']}: {e}")
+
+    # 删除数据库记录
+    await conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+    await conn.commit()
+    await conn.close()
+
+    # 清除缓存
+    invalidate_file_cache(file_id)
+
+    return True
+
+
+async def batch_delete_files(file_ids: list[str]) -> dict:
+    """
+    🗑️ 批量删除文件
+
+    Args:
+        file_ids: 文件 ID 列表
+
+    Returns:
+        dict: 包含成功和失败数量的字典
+    """
+    success_count = 0
+    failed_count = 0
+
+    for file_id in file_ids:
+        result = await delete_file(file_id)
+        if result:
+            success_count += 1
+        else:
+            failed_count += 1
+
+    return {
+        "success": success_count,
+        "failed": failed_count
+    }
+
+
+async def get_storage_stats() -> dict:
+    """
+    📊 获取存储统计
+
+    Returns:
+        dict: 存储统计数据
+    """
+    conn = await get_db_connection()
+
+    # 总文件数和大小
+    cursor = await conn.execute("SELECT COUNT(*) as count FROM files")
+    total_row = await cursor.fetchone()
+    total_files = total_row['count'] if total_row else 0
+
+    # 计算总存储大小
+    total_size = 0
+    by_type = {}
+    by_expiry = {"permanent": 0, "1d": 0, "7d": 0, "1m": 0}
+    expired_count = 0
+
+    cursor = await conn.execute("SELECT local_path, filename, expire_at FROM files")
+    rows = await cursor.fetchall()
+
+    now = datetime.datetime.now()
+    upload_dir = Path(Config.UPLOAD_DIR)
+
+    for row in rows:
+        # 获取文件大小
+        local_path = upload_dir / row['local_path']
+        size = 0
+        if local_path.exists():
+            size = local_path.stat().st_size
+        total_size += size
+
+        # 按类型统计
+        ext = Path(row['filename']).suffix.lower() or "无后缀"
+        by_type[ext] = by_type.get(ext, 0) + 1
+
+        # 按过期时间统计
+        if row['expire_at'] is None:
+            by_expiry["permanent"] += 1
+        else:
+            # 计算过期天数 (SQLite 返回字符串，需要转换为 datetime)
+            expire_at = datetime.datetime.fromisoformat(row['expire_at']) if isinstance(row['expire_at'], str) else row['expire_at']
+            delta = (expire_at - now).days
+            if delta < 0:
+                expired_count += 1
+            elif delta <= 1:
+                by_expiry["1d"] += 1
+            elif delta <= 7:
+                by_expiry["7d"] += 1
+            else:
+                by_expiry["1m"] += 1
+
+    await conn.close()
+
+    return {
+        "total_files": total_files,
+        "total_size": total_size,
+        "by_type": by_type,
+        "by_expiry": by_expiry,
+        "expired_count": expired_count
+    }
+
+
+async def get_upload_trend(days: int = 30) -> dict:
+    """
+    📈 获取上传趋势
+
+    Args:
+        days: 统计天数
+
+    Returns:
+        dict: 包含 dates, counts, sizes 的字典
+    """
+    conn = await get_db_connection()
+
+    # 计算日期范围
+    end_date = datetime.datetime.now()
+    start_date = end_date - datetime.timedelta(days=days)
+
+    # 查询每天的文件数量
+    cursor = await conn.execute("""
+        SELECT
+            DATE(created_at) as date,
+            COUNT(*) as count
+        FROM files
+        WHERE created_at >= ?
+        GROUP BY DATE(created_at)
+        ORDER BY date
+    """, (start_date,))
+
+    rows = await cursor.fetchall()
+    await conn.close()
+
+    # 构建完整的日期序列
+    dates = []
+    counts = []
+    sizes = []
+
+    for i in range(days):
+        date = start_date + datetime.timedelta(days=i)
+        date_str = date.strftime("%Y-%m-%d")
+        dates.append(date_str)
+
+        # 查找该日期的计数 (SQLite 的 DATE() 函数返回字符串，无需格式化)
+        count = 0
+        for row in rows:
+            row_date = row['date'] if row['date'] else ""
+            if row_date == date_str:
+                count = row['count']
+                break
+        counts.append(count)
+        sizes.append(0)  # 暂不返回大小趋势
+
+    return {
+        "dates": dates,
+        "counts": counts,
+        "sizes": sizes
+    }
+
+
+async def get_expiring_files(days: int = 7) -> dict:
+    """
+    ⏰ 获取即将过期的文件
+
+    Args:
+        days: 天数范围
+
+    Returns:
+        dict: 包含即将过期文件信息的字典
+    """
+    conn = await get_db_connection()
+
+    # 计算时间范围
+    now = datetime.datetime.now()
+    end_date = now + datetime.timedelta(days=days)
+
+    # 查询即将过期的文件
+    cursor = await conn.execute("""
+        SELECT id, filename, expire_at
+        FROM files
+        WHERE expire_at IS NOT NULL
+            AND expire_at > ?
+            AND expire_at <= ?
+        ORDER BY expire_at ASC
+    """, (now, end_date))
+
+    rows = await cursor.fetchall()
+    await conn.close()
+
+    files = []
+    for row in rows:
+        # SQLite 返回字符串，需要转换为 datetime
+        expire_at = datetime.datetime.fromisoformat(row['expire_at']) if isinstance(row['expire_at'], str) else row['expire_at']
+        delta = (expire_at - now).days
+        files.append({
+            "id": row['id'],
+            "filename": row['filename'],
+            "expire_at": row['expire_at'],  # 已是 ISO 格式字符串
+            "days_until_expiry": max(0, delta)
+        })
+
+    return {
+        "expiring_soon": len(files),
+        "files": files
+    }
+
+
+async def manual_cleanup() -> dict:
+    """
+    🧹 手动触发清理过期文件
+
+    Returns:
+        dict: 清理结果
+    """
+    conn = await get_db_connection()
+    now = datetime.datetime.now()
+
+    # 查询过期文件
+    cursor = await conn.execute("SELECT id, local_path, oss_path FROM files WHERE expire_at < ?")
+    rows = await cursor.fetchall()
+
+    if not rows:
+        await conn.close()
+        return {"cleaned": 0, "message": "没有过期文件需要清理"}
+
+    cleaned = 0
+
+    for row in rows:
+        file_id = row['id']
+        local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+
+        # 删除本地文件
+        if local_path.exists():
+            try:
+                await asyncio.to_thread(local_path.unlink)
+            except Exception as e:
+                log.error(f"删除本地文件失败 {local_path}: {e}")
+
+        # 删除 OSS 文件
+        if row['oss_path'] and Config.ENABLE_OSS:
+            from app.core.oss_client import OSSClient
+            try:
+                await OSSClient.delete(row['oss_path'])
+            except Exception as e:
+                log.error(f"删除 OSS 文件失败 {row['oss_path']}: {e}")
+
+        # 删除数据库记录
+        await conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+        invalidate_file_cache(file_id)
+        cleaned += 1
+
+    await conn.commit()
+    await conn.close()
+
+    return {"cleaned": cleaned, "message": f"已清理 {cleaned} 个过期文件"}
+
+
+# ==========================================
+# 👁️ 文件系统监控任务
+# ==========================================
+
+async def sync_missing_files_task():
+    """
+    👁️ 同步丢失文件任务
+
+    功能:
+        - 定期扫描数据库中的文件记录
+        - 检查磁盘文件是否存在
+        - 自动清理丢失文件的数据库记录
+
+    运行周期:
+        - 每 30 秒执行一次
+
+    注意:
+        - 处理磁盘文件被直接删除的情况
+        - 保证数据库与磁盘状态一致
+    """
+    log.info("👁️ 文件同步任务已启动，每 30 秒执行一次")
+
+    while True:
+        try:
+            conn = await get_db_connection()
+
+            # 查询所有文件记录
+            cursor = await conn.execute("SELECT id, local_path FROM files")
+            rows = await cursor.fetchall()
+            await conn.close()
+
+            missing_count = 0
+            for row in rows:
+                file_id = row['id']
+                local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+
+                # 检查文件是否存在
+                if not local_path.exists():
+                    missing_count += 1
+                    log.info(f"🗑️ 发现丢失文件: {file_id}，清理数据库记录")
+                    conn = await get_db_connection()
+                    await conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+                    await conn.commit()
+                    await conn.close()
+                    invalidate_file_cache(file_id)
+
+            if missing_count > 0:
+                log.info(f"✅ 同步任务完成，清理 {missing_count} 个丢失文件记录")
+
+        except Exception as e:
+            log.error(f"🚨 文件同步任务错误: {e}")
+
+        # 等待 30 秒后再次执行
+        await asyncio.sleep(30)
