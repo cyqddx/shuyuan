@@ -300,7 +300,7 @@ export default function SettingsPage() {
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
-            配置已修改，保存后服务将自动重启以使配置生效。
+            配置已修改，保存后将自动生效。
           </AlertDescription>
         </Alert>
       )}

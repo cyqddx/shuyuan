@@ -18,9 +18,14 @@
 """
 
 import os
+import threading
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Any, Callable, TYPE_CHECKING
 from functools import cached_property
+
+# TYPE_CHECKING 用于类型注解，避免循环导入
+if TYPE_CHECKING:
+    pass
 
 # Pydantic 配置管理
 from pydantic import Field, field_validator, model_validator
@@ -391,13 +396,142 @@ class Settings(BaseSettings):
 
 
 # ==========================================
+# 🔄 配置热重载代理
+# ==========================================
+
+class ConfigProxy:
+    """
+    🔄 配置代理类
+
+    支持热重载的线程安全配置访问代理。
+
+    功能:
+        - 线程安全的配置访问（使用 RLock）
+        - 配置热重载（替换底层 Settings 实例）
+        - 配置版本追踪（每次重载 version +1）
+        - 重载回调通知机制
+
+    使用方式:
+        与普通 Settings 实例完全兼容:
+        Config.auth_enabled
+        Config.api_key
+        Config.model_dump()
+
+    属性:
+        _settings: 当前生效的 Settings 实例
+        _lock: 线程安全锁（RLock 支持可重入）
+        _version: 配置版本号（从 0 开始，每次重载 +1）
+        _reload_callbacks: 配置重载后的回调函数列表
+    """
+
+    def __init__(self, settings: 'Settings'):
+        """
+        初始化配置代理
+
+        Args:
+            settings: 初始配置实例
+        """
+        self._settings = settings
+        self._lock = threading.RLock()
+        self._version = 0
+        self._reload_callbacks: list[Callable[['Settings', 'Settings'], None]] = []
+
+    def reload(self, new_settings: 'Settings') -> bool:
+        """
+        🔄 重新加载配置
+
+        线程安全地替换底层配置实例，并触发回调通知。
+
+        Args:
+            new_settings: 新的配置实例
+
+        Returns:
+            bool: 重载成功返回 True，失败返回 False
+        """
+        with self._lock:
+            old_settings = self._settings
+            try:
+                # 验证新配置
+                new_settings.model_validate(new_settings.model_dump())
+
+                # 替换配置实例
+                self._settings = new_settings
+                self._version += 1
+
+                # 触发回调（在锁外执行，避免死锁）
+                for callback in self._reload_callbacks:
+                    try:
+                        callback(old_settings, new_settings)
+                    except Exception as e:
+                        from app.core.logger import log
+                        log.error(f"配置重载回调失败: {e}")
+
+                return True
+            except Exception as e:
+                from app.core.logger import log
+                log.error(f"配置重载失败: {e}")
+                return False
+
+    def add_reload_callback(self, callback: Callable[['Settings', 'Settings'], None]):
+        """
+        📎 添加配置重载回调
+
+        配置重载成功后会调用此回调。
+
+        Args:
+            callback: 回调函数，接收 (old_settings, new_settings) 参数
+        """
+        self._reload_callbacks.append(callback)
+
+    @property
+    def version(self) -> int:
+        """
+        🔢 获取配置版本号
+
+        Returns:
+            int: 当前配置版本号（从 0 开始，每次重载 +1）
+        """
+        return self._version
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        🔍 代理所有属性访问到当前配置实例
+
+        支持 Config.auth_enabled、Config.api_key 等访问方式。
+
+        Args:
+            name: 属性名
+
+        Returns:
+            Any: 配置值
+        """
+        with self._lock:
+            return getattr(self._settings, name)
+
+    @property
+    def model_dump(self) -> dict:
+        """
+        📦 导出配置为字典
+
+        Returns:
+            dict: 配置字典
+        """
+        with self._lock:
+            return self._settings.model_dump()
+
+    def __repr__(self) -> str:
+        return f"ConfigProxy(version={self._version})"
+
+
+# ==========================================
 # 🏷️ 全局配置实例
 # ==========================================
 
-# 创建全局配置单例
+# 创建全局配置单例（支持热重载）
 # 应用启动时自动加载 .env 文件
 try:
-    Config = Settings()
+    _settings_instance = Settings()
+    Config = ConfigProxy(_settings_instance)
 except ValueError as e:
     # 配置验证失败，打印错误并退出
     print(f"\n{'='*60}")

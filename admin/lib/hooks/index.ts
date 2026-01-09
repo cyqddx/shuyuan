@@ -90,7 +90,7 @@ export function useHealth() {
   return useQuery({
     queryKey: queryKeys.system.health(),
     queryFn: () => systemApi.health(),
-    refetchInterval: 30000,
+    refetchInterval: 10000, // 10秒自动刷新（配合配置热重载）
   })
 }
 
@@ -116,6 +116,8 @@ export function useConfig() {
     queryKey: ["config"],
     queryFn: () => configApi.list(),
     refetchOnWindowFocus: false,
+    refetchInterval: 30000, // 30秒自动刷新（配合后端配置热重载）
+    staleTime: 10000, // 10秒内认为数据是新鲜的
   })
 }
 
@@ -127,8 +129,8 @@ export function useUpdateConfig() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["config"] })
       queryClient.invalidateQueries({ queryKey: queryKeys.system.health() })
-      toast.success(data.message, {
-        duration: 5000,
+      toast.success("配置已更新", {
+        duration: 3000,
       })
     },
     onError: (error: Error) => {
