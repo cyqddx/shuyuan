@@ -56,8 +56,6 @@ from app.core.oss_client import OSSClient
 from app.database import init_db, close_db
 # 后台清理任务
 from app.services import clean_expired_task, sync_missing_files_task
-# 配置热重载
-from app.core.config_reloader import ConfigReloader
 # API 路由
 from app.api import router
 
@@ -113,13 +111,11 @@ async def lifespan(app: FastAPI):
         4. 初始化加密引擎 (如启用)
         5. 初始化 OSS 客户端 (如启用)
         6. 启动后台清理任务
-        7. 启动配置文件监听
 
     关闭流程:
         1. 输出关闭日志
-        2. 停止配置文件监听
-        3. 优雅停止后台任务
-        4. 关闭 HTTP 客户端
+        2. 优雅停止后台任务
+        3. 关闭 HTTP 客户端
 
     Args:
         app: FastAPI 应用实例
@@ -127,9 +123,6 @@ async def lifespan(app: FastAPI):
     Yields:
         None - 应用运行期间在此等待
     """
-
-    # 声明变量（在关闭阶段需要访问）
-    config_reloader = None
 
     # ========== 启动阶段 ==========
 
@@ -174,11 +167,6 @@ async def lifespan(app: FastAPI):
     log.info("👁️ 正在启动文件同步任务...")
     sync_task = asyncio.create_task(sync_missing_files_task())
 
-    # 启动配置文件监听 (支持配置热重载)
-    log.info("👁️ 正在启动配置文件监听...")
-    config_reloader = ConfigReloader()
-    config_reloader.start_watching()
-
     log.info("✅ 图床服务启动完成！")
 
     # ========== 运行阶段 ==========
@@ -188,11 +176,6 @@ async def lifespan(app: FastAPI):
     # ========== 关闭阶段 ==========
 
     log.info("🛑 正在关闭图床服务...")
-
-    # 停止配置文件监听
-    if config_reloader:
-        config_reloader.stop_watching()
-        log.info("👁️ 配置文件监听已停止")
 
     # 关闭数据库连接池
     await close_db()

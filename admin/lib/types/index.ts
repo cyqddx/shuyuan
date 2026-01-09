@@ -109,7 +109,6 @@ export interface ConfigCategory {
 export interface ConfigListResponse {
   categories: ConfigCategory[]
   categories_order: string[]
-  version: number  // 配置版本号（用于热重载检测）
 }
 
 export interface ConfigUpdateRequest {

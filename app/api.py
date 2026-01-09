@@ -421,8 +421,7 @@ async def admin_get_config():
 
     return {
         "categories": [c.model_dump() for c in categories],
-        "categories_order": CATEGORIES,
-        "version": Config.version  # 配置版本号（用于热重载检测）
+        "categories_order": CATEGORIES
     }
 
 

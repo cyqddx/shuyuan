@@ -10,8 +10,10 @@
 """
 
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
+from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 from app.core.logger import log
@@ -223,6 +225,7 @@ class ConfigManager:
             from app.core.config import PROJECT_ROOT
             env_path = PROJECT_ROOT / ".env"
         self.env_path = env_path
+        self.backup_path = env_path.with_suffix(f".env.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
     def read_env_file(self) -> Dict[str, str]:
         """
@@ -247,7 +250,7 @@ class ConfigManager:
 
     def write_env_file(self, config: Dict[str, str]) -> bool:
         """
-        💾 写入 .env 文件（直接修改对应字段，保留注释和其他内容）
+        💾 写入 .env 文件
 
         Args:
             config: 配置键值对
@@ -256,48 +259,15 @@ class ConfigManager:
             bool: 是否写入成功
         """
         try:
-            # 读取原文件内容
+            # 备份原文件
             if self.env_path.exists():
-                with open(self.env_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-            else:
-                lines = []
+                shutil.copy2(self.env_path, self.backup_path)
+                log.info(f"📦 已备份原配置到: {self.backup_path.name}")
 
-            # 记录已处理的配置项
-            processed_keys = set()
-
-            # 遍历每一行，修改需要更新的配置
-            new_lines = []
-            for line in lines:
-                stripped = line.strip()
-                # 跳过注释和空行（直接保留）
-                if not stripped or stripped.startswith("#"):
-                    new_lines.append(line)
-                    continue
-
-                # 解析 KEY=VALUE
-                if "=" in stripped:
-                    key, _ = stripped.split("=", 1)
-                    key = key.strip()
-                    if key in config:
-                        # 修改这一行
-                        new_lines.append(f"{key}={config[key]}\n")
-                        processed_keys.add(key)
-                    else:
-                        # 保留原行
-                        new_lines.append(line)
-                else:
-                    # 保留原行
-                    new_lines.append(line)
-
-            # 添加新配置项（原文件中不存在的）
-            for key, value in config.items():
-                if key not in processed_keys:
-                    new_lines.append(f"{key}={value}\n")
-
-            # 写回文件
+            # 写入新配置
             with open(self.env_path, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
+                for key, value in config.items():
+                    f.write(f"{key}={value}\n")
 
             log.info(f"✅ 配置已写入: {self.env_path}")
             return True
