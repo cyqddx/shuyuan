@@ -34,6 +34,8 @@ dependencies = [
     # ========== 性能优化 ==========
     "uvloop>=0.22.1; sys_platform != 'win32'",  # 事件循环优化 (仅 Linux/macOS)
     "cachetools>=6.2.4",
+    # ========== 配置热重载 ==========
+    "watchdog>=5.0.0",                         # 文件系统监听（用于配置热重载）
 ]
 
 [project.optional-dependencies]

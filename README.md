@@ -2,9 +2,11 @@
 
 一个**企业级、高安全、高性能**的文件直链托管服务。
 
-专为 JSON 配置文件的分发设计，具备**透明加解密**、**即时压缩**、**哈希去重**、**混合存储**和**全链路监控**能力。
+专为 JSON 配置文件的分发设计，具备**透明加解密**、**即时压缩**、**哈希去重**、**混合存储**、**配置热重载**和**全链路监控**能力。
 
 > ✨ **高度模块化**：所有高级特性（加密、压缩、鉴权、Redis、OSS）均为**可选配置**，通过 `.env` 文件按需开启。
+>
+> 🔄 **配置热重载**：修改 `.env` 文件后无需重启服务，配置自动生效。
 
 ---
 
@@ -49,20 +51,28 @@
 | **健康检查** | `/health` 端点返回各组件状态 |
 | **结构化日志** | Loguru 日志，自动轮转、保留 30 天 |
 
-### 5. 🔧 技术栈
+### 5. 🔄 运维特性
 
-| 组件 | 技术 |
+| 功能 | 说明 |
 |------|------|
-| **Web 框架** | FastAPI + Uvicorn |
-| **数据库** | SQLite (aiosqlite 异步) |
-| **JSON 处理** | orjson |
-| **加密** | cryptography (Fernet AES-128) |
-| **缓存** | cachetools (TTL) |
-| **哈希** | hashlib.blake2b |
-| **随机数** | secrets (密码学安全) |
-| **路径操作** | pathlib |
-| **日志** | loguru |
-| **监控** | prometheus-fastapi-instrumentator |
+| **配置热重载** | 修改 `.env` 后自动生效，无需重启服务 |
+| **文件同步** | 定期扫描并清理磁盘上已删除的文件记录 |
+| **Web 管理界面** | Next.js 构建的现代化管理后台 |
+| **Docker 部署** | 支持完整部署、独立后端、独立前端三种模式 |
+
+### 6. 🔧 技术栈
+
+| 组件 | 后端技术 | 前端技术 |
+|------|---------|---------|
+| **Web 框架** | FastAPI + Uvicorn | Next.js 14 |
+| **数据库** | SQLite (aiosqlite 异步) | - |
+| **JSON 处理** | orjson | - |
+| **加密** | cryptography (Fernet) | - |
+| **缓存** | cachetools (TTL) | TanStack Query |
+| **日志** | loguru | - |
+| **监控** | prometheus-fastapi-instrumentator | - |
+| **UI 组件** | - | Radix UI + Tailwind CSS |
+| **图表** | - | Recharts |
 
 ---
 
@@ -70,34 +80,60 @@
 
 ```text
 tuchuang/
-├── app/
+├── app/                          # 后端 Python 应用
 │   ├── __init__.py
-│   ├── api.py              # 🛣️ API 路由 (上传/下载/健康检查/统计)
-│   ├── models.py           # 📦 Pydantic 数据模型
-│   ├── services.py         # ⚙️ 核心业务逻辑 (上传/下载/清理)
-│   ├── database.py         # 🗄️ 异步数据库 (aiosqlite)
-│   ├── exceptions.py       # ⚠️ 自定义异常类
+│   ├── api.py                    # 🛣️ API 路由
+│   ├── models.py                 # 📦 Pydantic 数据模型
+│   ├── services.py               # ⚙️ 核心业务逻辑
+│   ├── database.py               # 🗄️ 异步数据库
+│   ├── exceptions.py             # ⚠️ 自定义异常
+│   ├── config_manager.py         # 🔧 配置管理器
 │   └── core/
-│       ├── config.py       # ⚙️ 配置管理 (pydantic-settings)
-│       ├── crypto.py       # 🔐 加解密引擎 (Fernet)
-│       ├── http_client.py  # 🌐 全局异步 HTTP 客户端
-│       ├── logger.py       # 📝 日志配置 (Loguru)
-│       ├── oss_client.py   # ☁️ 阿里云 OSS 客户端
-│       └── security.py     # 🚦 限流与鉴权
-├── static/
-│   └── favicon.ico         # 🎨 网站图标
-├── uploads/                # 📁 本地存储目录
-├── logs/                   # 📝 运行日志
-├── docs/                   # 📚 文档目录
-│   ├── DEPLOYMENT.md       # 🚀 部署指南
-│   ├── ERROR_CODES.md      # ⚠️ 错误码文档
-│   └── TROUBLESHOOTING.md  # 🔧 故障排查
-├── .env                    # ⚙️ 配置文件
-├── .env.example            # 📄 配置示例
-├── pyproject.toml          # 📦 依赖配置
-├── docker-compose.yml      # 🐳 Docker 编排
-├── Dockerfile              # 🐳 镜像构建
-└── main.py                 # 🚀 应用入口
+│       ├── config.py             # ⚙️ 配置管理（支持热重载）
+│       ├── crypto.py             # 🔐 加解密引擎
+│       ├── http_client.py        # 🌐 HTTP 客户端
+│       ├── logger.py             # 📝 日志配置
+│       ├── oss_client.py         # ☁️ OSS 客户端
+│       ├── security.py           # 🚦 限流与鉴权
+│       ├── config_watcher.py     # 👁️ 文件监听器
+│       └── config_reloader.py    # 🔄 配置重载协调器
+│
+├── admin/                        # 🎨 前端管理界面 (Next.js)
+│   ├── app/                      # Next.js App Router
+│   │   ├── page.tsx              # 📊 仪表盘主页
+│   │   ├── files/                # 📁 文件管理
+│   │   ├── stats/                # 📈 统计分析
+│   │   └── settings/             # ⚙️ 系统设置
+│   ├── components/               # UI 组件
+│   │   ├── ui/                   # 基础组件 (Radix UI)
+│   │   └── dashboard/            # 仪表盘组件
+│   └── lib/                      # 工具库
+│       ├── api/                  # API 客户端
+│       ├── hooks/                # React Hooks
+│       ├── query-keys.ts         # Query Keys
+│       └── types/                # TypeScript 类型
+│
+├── docker/                       # 🐳 Docker 配置
+│   ├── Dockerfile.backend        # 后端镜像
+│   ├── Dockerfile.frontend       # 前端镜像
+│   └── README.md                 # Docker 部署说明
+│
+├── docs/                         # 📚 文档
+│   ├── DEPLOYMENT.md             # 部署指南
+│   ├── ERROR_CODES.md            # 错误码文档
+│   └── TROUBLESHOOTING.md         # 故障排查
+│
+├── static/                       # 静态资源
+├── uploads/                      # 本地存储目录
+├── logs/                         # 运行日志
+│
+├── .env                          # ⚙️ 配置文件
+├── .env.example                  # 📄 配置示例
+├── pyproject.toml                # 📦 Python 依赖
+├── docker-compose.yml            # 🐳 完整部署（前后端）
+├── docker-compose.backend.yml    # 🐳 仅后端
+├── docker-compose.frontend.yml   # 🐳 仅前端
+└── main.py                       # 🚀 应用入口
 ```
 
 ---
@@ -109,29 +145,51 @@ tuchuang/
 | [部署指南](docs/DEPLOYMENT.md) | 生产环境部署、监控、备份、安全建议 |
 | [错误码文档](docs/ERROR_CODES.md) | HTTP 状态码、业务错误码、错误响应格式 |
 | [故障排查](docs/TROUBLESHOOTING.md) | 常见问题及解决方案 |
+| [Docker 部署](docker/README.md) | Docker 部署详细说明 |
 
 ---
 
 ## 🛠️ 快速部署
 
-### 方式 A: Docker 部署 (推荐)
+### 方式 A: Docker 完整部署 (推荐)
 
 ```bash
-# 1. 复制配置文件
+# 1. 克隆项目
+git clone <repo_url>
+cd tuchuang
+
+# 2. 复制配置文件
 cp .env.example .env
 
-# 2. 生成加密密钥（如需开启加密）
+# 3. 生成加密密钥（如需开启加密）
 docker run --rm python:3.12 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
-# 3. 编辑 .env，填入必要配置
+# 4. 编辑 .env，填入必要配置
 # HOST_DOMAIN=http://your-domain:8000
 # ENCRYPTION_KEY=生成的密钥
 
-# 4. 启动服务
+# 5. 启动服务（前后端）
 docker-compose up -d --build
 ```
 
-### 方式 B: 本地部署 (使用 uv)
+服务启动后访问：
+- 后端 API: http://localhost:8000
+- API 文档: http://localhost:8000/docs
+- 前端管理: http://localhost:3000
+
+### 方式 B: Docker 分别部署
+
+```bash
+# 仅启动后端
+docker-compose -f docker-compose.backend.yml up -d --build
+
+# 仅启动前端
+docker-compose -f docker-compose.frontend.yml up -d --build
+```
+
+### 方式 C: 本地部署
+
+#### 后端
 
 ```bash
 # 1. 安装 uv
@@ -140,26 +198,34 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # 2. 安装依赖
 uv sync
 
-# 3. 生成加密密钥（如需开启加密）
-uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-# 4. 编辑 .env，填入必要配置
+# 3. 复制配置文件
 cp .env.example .env
 
-# 5. 启动服务
+# 4. 启动服务
 uv run main.py
 ```
 
-服务启动后访问：
-- API 文档: http://localhost:8000/docs
-- 健康检查: http://localhost:8000/health
-- Prometheus 指标: http://localhost:8000/metrics
+#### 前端
+
+```bash
+# 1. 进入 admin 目录
+cd admin
+
+# 2. 安装依赖
+npm install
+
+# 3. 配置环境变量
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+
+# 4. 启动开发服务器
+npm run dev
+```
 
 ---
 
 ## ⚙️ 配置说明 (.env)
 
-所有配置通过 `.env` 文件控制，**必填项缺失时服务无法启动**。
+所有配置通过 `.env` 文件控制，支持**热重载**，修改后自动生效。
 
 ### 基础配置 [必填]
 
@@ -240,7 +306,7 @@ x-api-key: your-secret-key
 GET /f/{file_id}
 ```
 
-自动处理：`读取磁盘 -> 解密 (AES) -> 解压 (Gzip) -> 返回 JSON`
+自动处理：`读取磁盘 → 解密 (AES) → 解压 (Gzip) → 返回 JSON`
 
 ### 3. 健康检查
 
@@ -255,7 +321,7 @@ GET /health
   "version": "1.0.0",
   "components": {
     "database": "🟢 正常",
-    "encryption": "🔴 未启用",
+    "encryption": "🟢 已启用",
     "compression": "🟢 已启用",
     "oss": "🔴 未启用",
     "redis": "🔴 未启用"
@@ -263,15 +329,7 @@ GET /health
 }
 ```
 
-### 4. 系统统计
-
-```bash
-GET /admin/stats
-```
-
-返回文件总数和系统配置状态。
-
-### 5. Prometheus 指标
+### 4. Prometheus 指标
 
 ```bash
 GET /metrics
@@ -310,7 +368,7 @@ Prometheus 格式的监控指标。
   → 大小检查
   → 后缀名校验
   → JSON 校验与压缩
-  → BLAKE2b 哈希计算（兼容旧 MD5）
+  → BLAKE2b 哈希计算
   → [去重检查 → 秒传]
   → Gzip 压缩 (可选)
   → Fernet 加密 (可选)
@@ -331,9 +389,35 @@ Prometheus 格式的监控指标。
 
 ---
 
+## 🔄 运维特性
+
+### 配置热重载
+
+修改 `.env` 文件后，配置会自动重载，无需重启服务：
+
+```bash
+# 修改配置
+vim .env
+
+# 1 秒内自动生效
+# 查看日志确认
+tail -f logs/server_$(date +%Y-%m-%d).log
+```
+
+### 文件同步
+
+后台任务每 30 秒扫描一次，自动清理磁盘上已删除的文件记录。
+
+### 自动清理
+
+后台任务每小时清理一次过期文件。
+
+---
+
 ## 📝 维护
 
 - **自动清理**: 后台任务每小时清理过期文件
+- **文件同步**: 每 30 秒同步文件状态
 - **日志轮转**: `logs/` 目录，按天切割，保留 30 天
 - **优雅关闭**: 支持信号处理，完成后台任务再退出
 
