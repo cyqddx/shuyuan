@@ -1,0 +1,70 @@
+# ==========================================
+# 🐳 管理后台 Docker 镜像
+# ==========================================
+# 多阶段构建:
+#   1. deps: 安装依赖
+#   2. builder: 构建应用
+#   3. runner: 生产环境运行
+# ==========================================
+
+# ==========================================
+# 阶段 1: 依赖安装
+# ==========================================
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# 复制依赖文件
+COPY package.json package-lock.json* ./
+# 安装依赖
+RUN npm ci
+
+# ==========================================
+# 阶段 2: 构建
+# ==========================================
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# 复制依赖
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# 设置构建时环境变量
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+# 确保 public 目录存在
+RUN mkdir -p public
+
+# 构建应用
+RUN npm run build
+
+# ==========================================
+# 阶段 3: 生产运行
+# ==========================================
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# 添加非 root 用户
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# 设置环境变量
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# 复制构建产物
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public/
+
+# 设置权限
+RUN chown -R nextjs:nodejs /app
+
+USER nextjs
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

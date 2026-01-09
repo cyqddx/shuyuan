@@ -55,7 +55,9 @@ from app.core.oss_client import OSSClient
 # 数据库初始化
 from app.database import init_db, close_db
 # 后台清理任务
-from app.services import clean_expired_task
+from app.services import clean_expired_task, sync_missing_files_task
+# 配置热重载
+from app.core.config_reloader import ConfigReloader
 # API 路由
 from app.api import router
 
@@ -111,11 +113,13 @@ async def lifespan(app: FastAPI):
         4. 初始化加密引擎 (如启用)
         5. 初始化 OSS 客户端 (如启用)
         6. 启动后台清理任务
+        7. 启动配置文件监听
 
     关闭流程:
         1. 输出关闭日志
-        2. 优雅停止后台任务
-        3. 关闭 HTTP 客户端
+        2. 停止配置文件监听
+        3. 优雅停止后台任务
+        4. 关闭 HTTP 客户端
 
     Args:
         app: FastAPI 应用实例
@@ -123,6 +127,9 @@ async def lifespan(app: FastAPI):
     Yields:
         None - 应用运行期间在此等待
     """
+
+    # 声明变量（在关闭阶段需要访问）
+    config_reloader = None
 
     # ========== 启动阶段 ==========
 
@@ -161,7 +168,16 @@ async def lifespan(app: FastAPI):
 
     # 启动后台清理任务 (每小时清理一次过期文件)
     log.info("🧹 正在启动后台清理任务...")
-    task = asyncio.create_task(clean_expired_task())
+    cleanup_task = asyncio.create_task(clean_expired_task())
+
+    # 启动文件同步任务 (每30秒同步一次)
+    log.info("👁️ 正在启动文件同步任务...")
+    sync_task = asyncio.create_task(sync_missing_files_task())
+
+    # 启动配置文件监听 (支持配置热重载)
+    log.info("👁️ 正在启动配置文件监听...")
+    config_reloader = ConfigReloader()
+    config_reloader.start_watching()
 
     log.info("✅ 图床服务启动完成！")
 
@@ -173,20 +189,21 @@ async def lifespan(app: FastAPI):
 
     log.info("🛑 正在关闭图床服务...")
 
+    # 停止配置文件监听
+    if config_reloader:
+        config_reloader.stop_watching()
+        log.info("👁️ 配置文件监听已停止")
+
     # 关闭数据库连接池
     await close_db()
     log.info("🗄️ 数据库连接池已关闭")
 
     # 优雅关闭后台任务 (等待最多 5 秒)
-    try:
-        await asyncio.wait_for(task, timeout=5)
-        log.info("✅ 后台清理任务已正常停止")
-    except asyncio.TimeoutError:
-        # 超时则强制取消
-        log.warning("⏰ 后台任务关闭超时，强制取消")
-        task.cancel()
-    except asyncio.CancelledError:
-        log.info("✅ 后台清理任务已取消")
+    tasks = [cleanup_task, sync_task]
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    log.info("✅ 后台任务已停止")
 
     # 关闭 HTTP 客户端
     await http_client.stop()
