@@ -1,36 +1,218 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🎨 图床管理后台
 
-## Getting Started
+基于 Next.js 14 构建的现代化管理界面，提供文件管理、统计分析和系统配置功能。
 
-First, run the development server:
+---
+
+## 🌟 功能特性
+
+### 仪表盘
+
+- 系统概览：文件总数、存储使用情况
+- 最近上传文件列表
+- 上传趋势图表（可自定义时间范围）
+- 存储使用统计
+
+### 文件管理
+
+- 文件列表展示（支持分页）
+- 搜索和筛选（按文件名或 ID）
+- 文件详情查看（含内容预览）
+- 单个/批量删除文件
+
+### 统计分析
+
+- 上传趋势分析（折线图）
+- 文件生命周期分析（即将过期文件提醒）
+- 存储使用统计
+
+### 系统设置
+
+- 配置项管理（支持热重载）
+- 密钥生成（API Key、加密密钥）
+- 系统状态实时监控
+
+---
+
+## 🛠️ 技术栈
+
+| 组件 | 技术 |
+|------|------|
+| **框架** | Next.js 14 (App Router) |
+| **UI 组件** | Radix UI + Tailwind CSS |
+| **状态管理** | TanStack Query (React Query) |
+| **图表** | Recharts |
+| **主题** | next-themes (暗色模式) |
+| **图标** | Lucide React |
+| **代码高亮** | react-syntax-highlighter |
+| **类型检查** | TypeScript |
+
+---
+
+## 📦 快速开始
+
+### 安装依赖
+
+```bash
+npm install
+# 或
+pnpm install
+# 或
+yarn install
+```
+
+### 配置环境变量
+
+创建 `.env.local` 文件：
+
+```bash
+# 后端 API 地址
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+### 开发模式
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+访问 http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 生产构建
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# 构建
+npm run build
 
-## Learn More
+# 启动生产服务器
+npm start
+```
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 📁 项目结构
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+admin/
+├── app/                      # Next.js App Router
+│   ├── page.tsx              # 仪表盘主页
+│   ├── files/                # 文件管理页面
+│   │   ├── page.tsx          # 文件列表
+│   │   └── [id]/             # 文件详情
+│   ├── stats/                # 统计页面
+│   │   ├── page.tsx          # 统计概览
+│   │   └── [days]/           # 趋势分析
+│   └── settings/             # 设置页面
+│       └── page.tsx          # 系统配置
+│
+├── components/               # UI 组件
+│   ├── ui/                   # 基础组件 (Radix UI)
+│   └── dashboard/            # 仪表盘组件
+│       ├── trend-chart.tsx  # 趋势图表
+│       └── recent-files.tsx  # 最近文件
+│
+├── lib/                     # 工具库
+│   ├── api/                  # API 客户端
+│   ├── hooks/                # React Hooks
+│   ├── query-keys.ts         # Query Keys
+│   └── types/                # TypeScript 类型
+│
+├── public/                   # 静态资源
+└── package.json              # 依赖配置
+```
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🔌 API 集成
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+前端通过以下 API 与后端通信：
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 系统健康检查 |
+| `/admin/files` | GET | 获取文件列表 |
+| `/admin/files/{id}` | GET | 获取文件详情 |
+| `/admin/files/{id}` | DELETE | 删除文件 |
+| `/admin/files/batch` | POST | 批量删除 |
+| `/admin/stats` | GET | 获取统计数据 |
+| `/admin/stats/trend` | GET | 获取上传趋势 |
+| `/admin/stats/storage` | GET | 获取存储统计 |
+| `/admin/stats/expiring` | GET | 获取即将过期文件 |
+| `/admin/config` | GET | 获取配置列表 |
+| `/admin/config` | POST | 更新配置 |
+| `/admin/config/generate/{type}` | POST | 生成密钥 |
+| `/admin/cleanup` | POST | 手动清理过期文件 |
+
+---
+
+## 🎨 UI 组件
+
+项目使用 Radix UI 作为基础组件库，配合 Tailwind CSS 进行样式定制。
+
+### 可用组件
+
+- Button、Input、Card、Table、Dialog、Select、Switch
+- Tabs、Badge、Separator、Alert、Checkbox、Tooltip
+- ScrollArea、Avatar、Pagination
+- Toast (Sonner) - 消息提示
+
+---
+
+## 📊 数据刷新策略
+
+使用 TanStack Query 管理服务端状态：
+
+- **文件列表**: 10 秒自动刷新
+- **系统健康**: 10 秒自动刷新
+- **配置列表**: 30 秒自动刷新（配合热重载）
+- **统计数据**: 30 秒自动刷新
+
+---
+
+## 🔐 鉴权配置
+
+如后端开启 API Key 鉴权，需要在 `.env.local` 中配置：
+
+```bash
+NEXT_PUBLIC_API_KEY=your-api-key
+```
+
+上传文件时会自动在请求头中携带 `x-api-key`。
+
+---
+
+## 📝 开发说明
+
+### 添加新页面
+
+在 `app/` 目录下创建新文件夹和 `page.tsx`：
+
+```typescript
+// app/new-page/page.tsx
+export default function NewPage() {
+  return <div>新页面内容</div>
+}
+```
+
+### 添加新 API
+
+在 `lib/api/index.ts` 中添加新的 API 函数：
+
+```typescript
+export const newApi = {
+  endpoint: () => http.get('/new-endpoint'),
+}
+```
+
+### 添加新 Hook
+
+在 `lib/hooks/index.ts` 中添加新的 Hook：
+
+```typescript
+export function useNewData() {
+  return useQuery({
+    queryKey: ['new-data'],
+    queryFn: () => newApi.getData(),
+  })
+}
+```
