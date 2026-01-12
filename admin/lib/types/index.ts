@@ -121,3 +121,45 @@ export interface ConfigUpdateResponse {
   message: string
   restarting: boolean
 }
+
+// 监控相关类型
+export interface RequestMetrics {
+  total: number
+  qps: number
+  by_method: Record<string, number>
+  by_path: Record<string, number>
+}
+
+export interface LatencyMetrics {
+  p50: number
+  p90: number
+  p95: number
+  p99: number
+  avg: number
+}
+
+export interface ErrorMetrics {
+  total: number
+  rate: number
+  by_status: Record<string, number>
+}
+
+export interface SystemMetrics {
+  uptime: number
+  memory_usage: number
+  total_memory: number
+  cpu_usage: number
+}
+
+export interface MetricsData {
+  requests: RequestMetrics
+  latency: LatencyMetrics
+  errors: ErrorMetrics
+  system: SystemMetrics
+}
+
+export interface MetricsResponse {
+  code: number
+  msg: string
+  data: MetricsData
+}

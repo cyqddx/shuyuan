@@ -27,6 +27,9 @@ import gzip  # Gzip 压缩
 import secrets  # 安全随机数生成
 import datetime  # 时间处理
 import asyncio  # 异步任务
+import re  # 正则表达式
+import time  # 时间戳
+import psutil  # 系统信息
 from pathlib import Path  # 路径操作
 
 # ========== 第三方库导入 ==========
@@ -1127,3 +1130,219 @@ async def sync_missing_files_task():
 
         # 等待 30 秒后再次执行
         await asyncio.sleep(30)
+
+
+# ==========================================
+# 📊 Prometheus 指标解析
+# ==========================================
+
+# 缓存 Prometheus 指标结果（10秒过期）
+_metrics_cache: TTLCache = TTLCache(maxsize=1, ttl=10)
+_metrics_cache_time: float = 0
+_startup_time: float = time.time()
+
+
+def _parse_prometheus_labels(labels_str: str) -> dict:
+    """
+    解析 Prometheus 标签字串
+
+    Args:
+        labels_str: 标签字串，如 'method="GET",path="/api"'
+
+    Returns:
+        dict: 解析后的标签字典
+    """
+    labels = {}
+    for match in re.finditer(r'(\w+)="([^"]*)"', labels_str):
+        labels[match.group(1)] = match.group(2)
+    return labels
+
+
+async def get_prometheus_metrics() -> dict:
+    """
+    📊 获取 Prometheus 监控指标（JSON 格式）
+
+    通过访问 /metrics 端点获取 Prometheus 格式数据，
+    解析后返回前端可用的 JSON 结构。
+
+    Returns:
+        dict: 包含 requests, latency, errors, system 的指标字典
+
+    指标说明:
+        - requests: 请求统计（总数、QPS、按方法/路径分组）
+        - latency: 延迟统计（p50/p90/p95/p99 平均）
+        - errors: 错误统计（总数、错误率、按状态码分组）
+        - system: 系统指标（运行时长、内存使用）
+    """
+    global _metrics_cache_time
+
+    current_time = time.time()
+    if current_time - _metrics_cache_time < 10 and _metrics_cache:
+        return _metrics_cache
+
+    import httpx
+
+    result = {
+        "requests": {
+            "total": 0,
+            "qps": 0,
+            "by_method": {},
+            "by_path": {}
+        },
+        "latency": {
+            "p50": 0,
+            "p90": 0,
+            "p95": 0,
+            "p99": 0,
+            "avg": 0
+        },
+        "errors": {
+            "total": 0,
+            "rate": 0,
+            "by_status": {}
+        },
+        "system": {
+            "uptime": int(current_time - _startup_time),
+            "memory_usage": 0,
+            "total_memory": 0,
+            "cpu_usage": 0
+        }
+    }
+
+    try:
+        # 访问本地 metrics 端点
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get("http://localhost:8000/metrics")
+            metrics_text = response.text
+    except Exception as e:
+        log.warning(f"📊 获取 Prometheus 指标失败: {e}")
+        return result
+
+    # ========== 解析 http_server_requests_count ==========
+    total_requests = 0
+    status_counts = {}
+
+    for match in re.finditer(
+        r'http_server_requests_count\{([^}]*)\} (\d+)',
+        metrics_text
+    ):
+        labels_str = match.group(1)
+        value = int(match.group(2))
+        labels = _parse_prometheus_labels(labels_str)
+
+        method = labels.get("method", "UNKNOWN")
+        path = labels.get("path", "")
+        status = labels.get("status_code", "")
+
+        total_requests += value
+
+        # 按方法分组
+        if method:
+            result["requests"]["by_method"][method] = \
+                result["requests"]["by_method"].get(method, 0) + value
+
+        # 按路径分组（只统计前 10 个）
+        if path and len(result["requests"]["by_path"]) < 10:
+            result["requests"]["by_path"][path] = \
+                result["requests"]["by_path"].get(path, 0) + value
+
+        # 按状态码分组
+        if status:
+            status_counts[status] = status_counts.get(status, 0) + value
+            # 4xx 和 5xx 视为错误
+            if status.startswith(("4", "5")):
+                result["errors"]["total"] += value
+                result["errors"]["by_status"][status] = \
+                    result["errors"]["by_status"].get(status, 0) + value
+
+    result["requests"]["total"] = total_requests
+
+    # 计算 QPS（基于运行时长）
+    uptime = current_time - _startup_time
+    if uptime > 0:
+        result["requests"]["qps"] = round(total_requests / uptime, 2)
+
+    # 计算错误率
+    if total_requests > 0:
+        result["errors"]["rate"] = round(
+            (result["errors"]["total"] / total_requests) * 100, 2
+        )
+
+    # ========== 解析 http_server_requests_duration_seconds_bucket ==========
+    # 解析延迟直方图数据
+    latency_buckets: dict[str, list[float]] = {}
+
+    for match in re.finditer(
+        r'http_server_requests_duration_seconds_bucket\{([^}]*)\} (\d+)',
+        metrics_text
+    ):
+        labels_str = match.group(1)
+        value = int(match.group(2))
+        labels = _parse_prometheus_labels(labels_str)
+
+        le = labels.get("le", "")
+        if le == "+Inf":
+            continue
+
+        if le not in latency_buckets:
+            latency_buckets[le] = []
+        latency_buckets[le].append(value)
+
+    # 计算分位数（基于所有路径的数据）
+    if latency_buckets:
+        # 获取所有桶中的最大值（总量）
+        bucket_values = []
+        for le in sorted(latency_buckets.keys(), key=float):
+            if latency_buckets[le]:
+                bucket_values.append(max(latency_buckets[le]))
+
+        if bucket_values:
+            total_samples = max(bucket_values) if bucket_values else 1
+
+            # 估算分位数（基于 Prometheus 的桶分布）
+            # p50: 0.1s, p90: 0.5s, p95: 0.75s, p99: 1s
+            percentile_map = {"0.1": "p50", "0.5": "p90", "0.75": "p95", "1": "p99"}
+            for le_str, key in percentile_map.items():
+                # 找到对应的桶
+                for le in latency_buckets:
+                    if float(le) <= float(le_str) and latency_buckets[le]:
+                        ratio = max(latency_buckets[le]) / total_samples if total_samples > 0 else 0
+                        if ratio >= 0.5:
+                            result["latency"][key] = int(float(le) * 1000)
+                            break
+
+            # 计算平均延迟（从 _sum 和 _count 指标）
+            sum_match = re.search(
+                r'http_server_requests_duration_seconds_sum\{[^}]*\} ([\d.]+)',
+                metrics_text
+            )
+            count_match = re.search(
+                r'http_server_requests_duration_seconds_count\{[^}]*\} (\d+)',
+                metrics_text
+            )
+            if sum_match and count_match:
+                total_sum = float(sum_match.group(1))
+                total_count = int(count_match.group(1))
+                if total_count > 0:
+                    result["latency"]["avg"] = int((total_sum / total_count) * 1000)
+
+    # ========== 系统指标 ==========
+    try:
+        # 内存信息（系统级）
+        mem = psutil.virtual_memory()
+        # 已用内存（MB）
+        result["system"]["memory_usage"] = round((mem.total - mem.available) / 1024 / 1024, 2)
+        # 内存总量（MB）
+        result["system"]["total_memory"] = round(mem.total / 1024 / 1024, 2)
+
+        # CPU 使用率（系统级，百分比）
+        result["system"]["cpu_usage"] = round(psutil.cpu_percent(interval=0.1), 2)
+    except Exception as e:
+        log.warning(f"获取系统指标失败: {e}")
+
+    # 更新缓存
+    _metrics_cache.clear()
+    _metrics_cache.update(result)
+    _metrics_cache_time = current_time
+
+    return result

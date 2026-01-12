@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图床服务监控</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border: #475569;
+            --primary: #3b82f6;
+            --success: #22c55e;
+            --warning: #eab308;
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .header .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card-title {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .card-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 16px;
+        }
+
+        .chart-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .chart-card h3 {
+            font-size: 16px;
+            margin-bottom: 16px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 250px;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-card);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-fill.blue { background: var(--primary); }
+        .progress-fill.green { background: var(--success); }
+        .progress-fill.yellow { background: var(--warning); }
+        .progress-fill.red { background: var(--danger); }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .error {
+            text-align: center;
+            padding: 40px;
+            color: var(--danger);
+        }
+
+        @media (max-width: 768px) {
+            .chart-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 图床服务监控</h1>
+            <div class="status">
+                <div class="status-dot"></div>
+                <span>实时更新中 (每 10 秒)</span>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <div class="card-title">📈 总请求数</div>
+                <div class="card-value" id="total-requests">-</div>
+                <div class="card-subtitle">QPS: <span id="qps">-</span></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">⚡ 平均延迟</div>
+                <div class="card-value"><span id="avg-latency">-</span> <span style="font-size: 16px;">ms</span></div>
+                <div class="card-subtitle">P99: <span id="p99-latency">-</span> ms</div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">🔴 错误率</div>
+                <div class="card-value" id="error-rate">-</div>
+                <div class="card-subtitle">错误数: <span id="total-errors">-</span></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">⏱️ 运行时长</div>
+                <div class="card-value" id="uptime">-</div>
+            </div>
+        </div>
+
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3>📊 延迟分布</h3>
+                <div class="chart-container">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-card">
+                <h3>🔄 请求方法分布</h3>
+                <div class="chart-container">
+                    <canvas id="methodChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="chart-grid" style="margin-top: 16px;">
+            <div class="chart-card">
+                <h3>💾 内存使用</h3>
+                <div style="margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                        <span style="font-size: 14px; color: var(--text-secondary);">已用 / 总量</span>
+                        <span style="font-size: 20px; font-weight: 600;" id="memory-text">- MB / - MB</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+                        <span>使用率</span>
+                        <span id="memory-percent">- %</span>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill blue" id="memory-bar" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="chart-card">
+                <h3>🖥️ CPU 使用率</h3>
+                <div style="display: flex; align-items: center; justify-content: center; padding: 20px 0;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; font-weight: 700;" id="cpu-usage">-.-</div>
+                        <div style="color: var(--text-secondary); font-size: 14px;">%</div>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill green" id="cpu-bar" style="width: 0%"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+                    <span>低负载</span>
+                    <span>高负载</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API 地址（自动检测）
+        const API_BASE = window.location.origin;
+
+        let latencyChart = null;
+        let methodChart = null;
+
+        // 格式化运行时长
+        function formatUptime(seconds) {
+            if (seconds < 60) return `${seconds} 秒`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时`;
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            return `${days} 天 ${hours} 小时`;
+        }
+
+        // 初始化图表
+        function initCharts() {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: { color: '#94a3b8' }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: '#334155' }
+                    },
+                    y: {
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: '#334155' }
+                    }
+                }
+            };
+
+            // 延迟分布图
+            latencyChart = new Chart(document.getElementById('latencyChart'), {
+                type: 'bar',
+                data: {
+                    labels: ['P50', 'P90', 'P95', 'P99'],
+                    datasets: [{
+                        label: '延迟 (ms)',
+                        data: [0, 0, 0, 0],
+                        backgroundColor: '#3b82f6',
+                        borderRadius: 4
+                    }]
+                },
+                options: chartOptions
+            });
+
+            // 请求方法图
+            methodChart = new Chart(document.getElementById('methodChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: ['#3b82f6', '#22c55e', '#eab308', '#ef4444', '#8b5cf6']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 获取监控数据
+        async function fetchMetrics() {
+            try {
+                const response = await fetch(`${API_BASE}/admin/metrics`);
+                const result = await response.json();
+
+                if (result.code === 200) {
+                    updateDashboard(result.data);
+                }
+            } catch (error) {
+                console.error('获取监控数据失败:', error);
+            }
+        }
+
+        // 更新仪表盘
+        function updateDashboard(data) {
+            // 请求指标
+            document.getElementById('total-requests').textContent = data.requests.total.toLocaleString();
+            document.getElementById('qps').textContent = data.requests.qps.toFixed(2);
+
+            // 延迟指标
+            document.getElementById('avg-latency').textContent = data.latency.avg;
+            document.getElementById('p99-latency').textContent = data.latency.p99;
+
+            // 更新延迟图表
+            latencyChart.data.datasets[0].data = [
+                data.latency.p50,
+                data.latency.p90,
+                data.latency.p95,
+                data.latency.p99
+            ];
+            latencyChart.update();
+
+            // 错误指标
+            const errorRate = data.errors.rate;
+            document.getElementById('error-rate').textContent = errorRate.toFixed(2) + '%';
+            document.getElementById('error-rate').style.color = errorRate > 5 ? '#ef4444' : '#22c55e';
+            document.getElementById('total-errors').textContent = data.errors.total;
+
+            // 系统指标
+            document.getElementById('uptime').textContent = formatUptime(data.system.uptime);
+
+            // 内存使用
+            const memoryUsage = data.system.memory_usage || 0;
+            const totalMemory = data.system.total_memory || 1;
+            const memoryPercent = (memoryUsage / totalMemory) * 100;
+
+            document.getElementById('memory-text').textContent = `${memoryUsage.toFixed(1)} MB / ${totalMemory.toFixed(0)} MB`;
+            document.getElementById('memory-percent').textContent = `${memoryPercent.toFixed(1)} %`;
+            document.getElementById('memory-bar').style.width = `${Math.min(memoryPercent, 100)}%`;
+
+            // CPU 使用率
+            const cpuUsage = data.system.cpu_usage || 0;
+            document.getElementById('cpu-usage').textContent = cpuUsage.toFixed(1);
+            const cpuBar = document.getElementById('cpu-bar');
+            cpuBar.style.width = `${Math.min(cpuUsage, 100)}%`;
+            cpuBar.className = 'progress-fill ' + (
+                cpuUsage > 80 ? 'red' : cpuUsage > 50 ? 'yellow' : 'green'
+            );
+
+            // 更新请求方法图表
+            const methods = Object.entries(data.requests.by_method);
+            methodChart.data.labels = methods.map(m => m[0]);
+            methodChart.data.datasets[0].data = methods.map(m => m[1]);
+            methodChart.update();
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            fetchMetrics();
+
+            // 每 10 秒刷新一次
+            setInterval(fetchMetrics, 10000);
+        });
+    </script>
+</body>
+</html>

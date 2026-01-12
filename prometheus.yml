@@ -1,0 +1,38 @@
+# Prometheus 配置文件
+# 用于采集图床服务的监控指标
+
+global:
+  # 采集间隔
+  scrape_interval: 15s
+  # 评估间隔
+  evaluation_interval: 15s
+  # 外部标签
+  external_labels:
+    monitor: 'tuchuang-monitor'
+
+# 告警规则文件（可选）
+# rule_files:
+#   - "alerts/*.yml"
+
+# 采集配置
+scrape_configs:
+  # 图床服务监控
+  - job_name: 'tuchuang'
+    # 静态配置目标
+    static_configs:
+      # Docker 环境使用服务名
+      - targets: ['tuchuang:8000']
+        labels:
+          service: 'tuchuang'
+          env: 'production'
+
+    # 采集路径
+    metrics_path: '/metrics'
+
+    # 采集超时
+    scrape_timeout: 10s
+
+  # Prometheus 自监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
