@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { filesApi, statsApi, systemApi, configApi } from "@/lib/api"
+import { filesApi, statsApi, systemApi, configApi, metricsApi } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 
 // 文件相关 Hooks
@@ -135,6 +135,21 @@ export function useUpdateConfig() {
     },
     onError: (error: Error) => {
       toast.error(error.message)
+    },
+  })
+}
+
+// 监控相关 Hooks
+export function useMetrics() {
+  return useQuery({
+    queryKey: ["metrics"],
+    queryFn: () => metricsApi.get(),
+    refetchInterval: 10000, // 10秒自动刷新
+    select: (response) => {
+      // 处理不同的响应格式
+      if (!response) return null
+      if ('data' in response) return response.data
+      return response
     },
   })
 }

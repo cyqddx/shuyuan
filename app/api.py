@@ -38,6 +38,7 @@ from app.services import (
     get_upload_trend,
     get_expiring_files,
     manual_cleanup,
+    get_prometheus_metrics,
 )
 # 安全模块
 from app.core.security import limiter, verify_api_key
@@ -490,6 +491,98 @@ async def admin_update_config(request: ConfigUpdateRequest):
         message=f"{message}，{restart_message}",
         restarting=restart_success
     )
+
+
+# ==========================================
+# 📊 监控指标 API
+# ==========================================
+
+@router.get("/admin/metrics", summary="监控指标", description="获取 Prometheus 监控指标（JSON 格式）")
+async def admin_get_metrics():
+    """
+    📊 获取监控指标
+
+    返回解析后的 Prometheus 指标数据，包括：
+    - requests: 请求统计（总数、QPS、按方法/路径分组）
+    - latency: 延迟统计（p50/p90/p95/p99 平均）
+    - errors: 错误统计（总数、错误率、按状态码分组）
+    - system: 系统指标（运行时长、内存使用、CPU 使用率）
+
+    Returns:
+        dict: 包含各类监控指标的字典
+
+    返回格式:
+        ```json
+        {
+            "requests": {
+                "total": 1234,
+                "qps": 0.12,
+                "by_method": {"GET": 1000, "POST": 200},
+                "by_path": {"/upload": 500, "/f/": 700}
+            },
+            "latency": {
+                "p50": 50,
+                "p90": 120,
+                "p95": 180,
+                "p99": 300,
+                "avg": 80
+            },
+            "errors": {
+                "total": 10,
+                "rate": 0.81,
+                "by_status": {"404": 5, "500": 3}
+            },
+            "system": {
+                "uptime": 3600,
+                "memory_usage": 128.5,
+                "cpu_usage": 5.2
+            }
+        }
+        ```
+    """
+    metrics = await get_prometheus_metrics()
+    return {
+        "code": 200,
+        "msg": "✅ 获取成功",
+        "data": metrics
+    }
+
+
+@router.get("/monitoring", summary="监控页面", description="返回独立监控页面")
+async def monitoring_page():
+    """
+    📊 独立监控页面
+
+    返回一个独立的 HTML 监控页面，无需前端框架即可使用
+
+    Returns:
+        HTMLResponse: 独立监控页面的 HTML 内容
+    """
+    from fastapi.responses import HTMLResponse
+    from pathlib import Path
+
+    template_path = Path(__file__).parent.parent / "app" / "templates" / "monitoring.html"
+
+    if template_path.exists():
+        with open(template_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    else:
+        # 如果模板文件不存在，返回默认内容
+        content = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>图床服务监控</title>
+            <meta charset="utf-8">
+        </head>
+        <body>
+            <h1>监控页面模板未找到</h1>
+            <p>请确保 app/templates/monitoring.html 文件存在</p>
+        </body>
+        </html>
+        """
+
+    return HTMLResponse(content=content)
 
 
 # ==========================================

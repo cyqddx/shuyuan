@@ -31,6 +31,7 @@ dependencies = [
     # ========== 日志与监控 ==========
     "loguru>=0.7.3",              # 结构化日志
     "prometheus-fastapi-instrumentator>=7.1.0",  # Prometheus 监控
+    "psutil>=6.1.0",              # 系统信息（CPU、内存）
     # ========== 性能优化 ==========
     "uvloop>=0.22.1; sys_platform != 'win32'",  # 事件循环优化 (仅 Linux/macOS)
     "cachetools>=6.2.4",

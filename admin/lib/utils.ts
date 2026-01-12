@@ -6,11 +6,19 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B"
+  if (bytes === 0) return "0 MB"
+
   const k = 1024
-  const sizes = ["B", "KB", "MB", "GB", "TB"]
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
+  const mb = bytes / k / k
+
+  // 小于 1KB 显示 B
+  if (bytes < k) return `${bytes} B`
+  // 小于 1MB 显示 KB
+  if (bytes < k * k) return `${(bytes / k).toFixed(1)} KB`
+  // 1MB - 1GB 显示 MB（保留1位小数）
+  if (bytes < k * k * k) return `${mb.toFixed(1)} MB`
+  // 大于等于 1GB 显示 GB（保留2位小数）
+  return `${(mb / 1024).toFixed(2)} GB`
 }
 
 export function formatDate(dateStr: string): string {

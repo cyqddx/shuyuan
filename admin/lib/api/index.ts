@@ -9,6 +9,7 @@ import type {
   AdminStats,
   ConfigListResponse,
   ConfigUpdateResponse,
+  MetricsResponse,
 } from "@/lib/types"
 
 const apiClient = axios.create({
@@ -95,4 +96,10 @@ export const configApi = {
 
   generateKey: (keyType: "api_key" | "encryption_key"): Promise<{ key: string } | { error: string }> =>
     apiClient.post(`/admin/config/generate/${keyType}`),
+}
+
+// 监控 API
+export const metricsApi = {
+  get: (): Promise<MetricsResponse> =>
+    apiClient.get("/admin/metrics"),
 }

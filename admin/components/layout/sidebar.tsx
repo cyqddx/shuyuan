@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Files,
   BarChart3,
+  Activity,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -33,6 +34,11 @@ export function Sidebar() {
       title: "数据统计",
       href: "/stats",
       icon: BarChart3,
+    },
+    {
+      title: "系统监控",
+      href: "/monitoring",
+      icon: Activity,
     },
     {
       title: "系统设置",
