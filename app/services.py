@@ -57,7 +57,9 @@ from app.core.oss_client import OSSClient
 class JSONValidationConfig:
     """JSON 验证配置类"""
     max_depth: int = 20        # 最大嵌套深度
-    max_fields: int = 1000     # 最大字段/数组长度
+    # 真实书源合集动辄数千源(每源含几十字段), 上限给足;
+    # 滥用防护由 max_total_length (10MB) 兜底, 全链路实测毫秒级
+    max_fields: int = 100_000  # 最大字段/数组长度
     max_total_length: int = 10 * 1024 * 1024  # 最大总大小 (10MB)
 
 

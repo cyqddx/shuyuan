@@ -98,8 +98,8 @@ class TestDataProcessing:
 
     def test_json_field_limit(self):
         """测试 JSON 字段数量限制"""
-        # 构造超大对象
-        large_obj = {f"field_{i}": i for i in range(1500)}
+        # 构造超大对象 (上限 10 万, 真实书源合集数千源)
+        large_obj = {f"field_{i}": i for i in range(150_001)}
         import json
         large_json = json.dumps(large_obj).encode()
 
@@ -110,14 +110,22 @@ class TestDataProcessing:
 
     def test_json_array_limit(self):
         """测试 JSON 数组长度限制"""
-        # 构造超大数组
+        # 构造超大数组 (上限 10 万)
         import json
-        large_array = json.dumps([i for i in range(1500)]).encode()
+        large_array = json.dumps([i for i in range(150_001)]).encode()
 
         with pytest.raises(HTTPException) as exc_info:
             validate_and_minify(large_array)
         assert exc_info.value.status_code == 400
         assert "数组过长" in exc_info.value.detail
+
+    def test_json_large_booksource_ok(self):
+        """真实形态大书源合集 (5000 源) 应正常通过"""
+        import json
+        sources = [{"bookSourceName": f"源{i}", "bookSourceUrl": f"https://e{i}.com",
+                    "ruleSearch": {"bookList": "a"}} for i in range(5000)]
+        result = validate_and_minify(json.dumps(sources, ensure_ascii=False).encode())
+        assert "源".encode() in result  # orjson 默认输出 UTF-8 不转义
 
     def test_json_size_limit(self):
         """测试 JSON 大小限制"""
