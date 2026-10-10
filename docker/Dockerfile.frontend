@@ -12,12 +12,14 @@
 # ==========================================
 FROM node:20-alpine AS deps
 RUN apk add --no-cache libc6-compat
+# 安装 pnpm (直接 npm 全局装, 避免 corepack 的网络校验卡顿)
+RUN npm i -g pnpm@11
 WORKDIR /app
 
 # 复制依赖文件
-COPY admin/package.json admin/package-lock.json* ./
+COPY admin/package.json admin/pnpm-workspace.yaml admin/pnpm-lock.yaml ./
 # 安装依赖
-RUN npm ci
+RUN pnpm install --frozen-lockfile
 
 # ==========================================
 # 阶段 2: 构建
@@ -37,7 +39,7 @@ ENV NODE_ENV=production
 RUN mkdir -p public
 
 # 构建应用
-RUN npm run build
+RUN pnpm run build
 
 # ==========================================
 # 阶段 3: 生产运行

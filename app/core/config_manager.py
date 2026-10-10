@@ -13,36 +13,8 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from app.models import ConfigItem
 from app.core.logger import log
-
-
-# ==========================================
-# 📋 配置项定义
-# ==========================================
-
-class ConfigItem(BaseModel):
-    """单个配置项定义"""
-    key: str = Field(..., description="配置键名")
-    label: str = Field(..., description="显示名称")
-    value: str = Field(..., description="当前值")
-    type: str = Field(default="text", description="输入类型: text, number, boolean, select")
-    category: str = Field(default="基础", description="配置分类")
-    description: str = Field(default="", description="配置说明")
-    options: Optional[list[str]] = Field(None, description="可选值列表")
-    sensitive: bool = Field(default=False, description="是否敏感信息")
-    placeholder: str = Field(default="", description="占位符")
-    min_value: Optional[int] = Field(None, description="最小值（数字类型）")
-    max_value: Optional[int] = Field(None, description="最大值（数字类型）")
-    required: bool = Field(default=False, description="是否必填")
-    pattern: Optional[str] = Field(None, description="正则验证模式")
-    generate_command: Optional[str] = Field(None, description="生成命令（用于密钥等）")
-    generate_type: Optional[str] = Field(None, description="生成类型：api_key, encryption_key")
-
-
-class ConfigUpdateRequest(BaseModel):
-    """配置更新请求"""
-    updates: Dict[str, str] = Field(..., description="配置更新 {key: value}")
 
 
 # ==========================================
@@ -74,6 +46,15 @@ CONFIG_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "description": "API 访问密钥",
         "sensitive": True,
         "placeholder": "请输入强密码或点击生成",
+        "generate_type": "api_key",
+    },
+    "API_KEYS": {
+        "label": "多 API Key",
+        "type": "text",
+        "category": "鉴权",
+        "description": "逗号分隔的多个 API Key（设置后优先于单个 API Key，泄露可单独移除）",
+        "sensitive": True,
+        "placeholder": "key-for-reader,key-for-script",
         "generate_type": "api_key",
     },
 
@@ -385,30 +366,12 @@ class ConfigManager:
         """
         🔄 重启服务
 
-        Returns:
-            tuple[bool, str]: (是否成功, 消息)
+        发送 SIGTERM 终止当前进程，由 systemd (Restart=always) 或
+        Docker (restart: unless-stopped) 重新拉起，使新配置生效。
         """
-        try:
-            # 检测运行环境
-            if os.path.exists("/.dockerenv"):
-                # Docker 环境：使用 supervisor 或直接退出让容器重启
-                if os.path.exists("/usr/bin/supervisorctl"):
-                    os.system("supervisorctl restart tuchuang")
-                    return True, "✅ 服务重启命令已发送"
-                else:
-                    # 直接退出，让 Docker 容器管理器重启
-                    return True, "✅ 配置已保存，服务将在几秒后自动重启"
-            else:
-                # 本地开发环境：尝试使用 supervisor
-                result = os.system("supervisorctl restart tuchuang 2>/dev/null")
-                if result == 0:
-                    return True, "✅ 服务重启成功"
-                else:
-                    return True, "✅ 配置已保存，请手动重启服务"
-
-        except Exception as e:
-            log.exception("重启服务异常")
-            return False, f"❌ 重启服务失败: {str(e)}"
+        import signal
+        os.kill(os.getpid(), signal.SIGTERM)
+        return True, "✅ 配置已保存，服务正在重启"
 
     def _mask_sensitive(self, value: str, sensitive: bool) -> str:
         """
@@ -434,8 +397,6 @@ class ConfigManager:
 
 __all__ = [
     "ConfigManager",
-    "ConfigItem",
-    "ConfigUpdateRequest",
     "CONFIG_DEFINITIONS",
     "CATEGORIES",
 ]

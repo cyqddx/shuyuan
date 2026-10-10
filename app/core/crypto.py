@@ -68,15 +68,15 @@ class CryptoEngine:
                防止敏感数据被明文存储
         """
         # 检查是否启用加密
-        if Config.ENCRYPTION_ENABLED:
+        if Config.encryption_enabled:
             # 加密已开启，检查密钥是否配置
-            if not Config.ENCRYPTION_KEY:
+            if not Config.encryption_key:
                 # 密钥缺失，抛出致命错误
                 raise ValueError("💥 加密已开启 (ENCRYPTION_ENABLED=True) 但未设置 ENCRYPTION_KEY，服务停止")
 
             try:
                 # 使用配置的密钥初始化 Fernet 加密器
-                cls._cipher = Fernet(Config.ENCRYPTION_KEY.encode())
+                cls._cipher = Fernet(Config.encryption_key.encode())
                 log.info("🔐 加密引擎: 已启用 (数据将以 AES-128 加密存储)")
             except Exception as e:
                 # 密钥格式错误或其他初始化失败
@@ -106,7 +106,7 @@ class CryptoEngine:
             - 加密后数据长度约为原数据长度的 1.5 倍
         """
         # 检查加密是否启用
-        if not Config.ENCRYPTION_ENABLED or cls._cipher is None:
+        if not Config.encryption_enabled or cls._cipher is None:
             # 加密未启用，直接返回原数据
             return data
 
@@ -136,7 +136,7 @@ class CryptoEngine:
             ⚠️ 如果数据被篡改或密钥错误，解密会失败并抛出 InvalidToken
         """
         # 检查加密是否启用
-        if not Config.ENCRYPTION_ENABLED or cls._cipher is None:
+        if not Config.encryption_enabled or cls._cipher is None:
             # 加密未启用，直接返回原数据
             return data
 

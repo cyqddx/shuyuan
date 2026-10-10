@@ -46,18 +46,14 @@ from app.core.config import Config, PROJECT_ROOT
 from app.core.logger import log
 # 安全模块 - 限流器
 from app.core.security import limiter
-# HTTP 客户端 - 复用 TCP 连接
-from app.core.http_client import http_client
 # 加密引擎 - Fernet AES-128 加密
 from app.core.crypto import CryptoEngine
 # OSS 客户端 - 阿里云对象存储
 from app.core.oss_client import OSSClient
 # 数据库初始化
-from app.database import init_db, close_db
+from app.database import init_db
 # 后台清理任务
-from app.services import clean_expired_task, sync_missing_files_task
-# 配置热重载
-from app.core.config_reloader import ConfigReloader
+from app.services import clean_expired_task
 # API 路由
 from app.api import router
 
@@ -109,17 +105,13 @@ async def lifespan(app: FastAPI):
     启动流程:
         1. 输出启动日志
         2. 初始化数据库
-        3. 启动 HTTP 客户端
-        4. 初始化加密引擎 (如启用)
-        5. 初始化 OSS 客户端 (如启用)
-        6. 启动后台清理任务
-        7. 启动配置文件监听
+        3. 初始化加密引擎 (如启用)
+        4. 初始化 OSS 客户端 (如启用)
+        5. 启动后台清理任务
 
     关闭流程:
         1. 输出关闭日志
-        2. 停止配置文件监听
-        3. 优雅停止后台任务
-        4. 关闭 HTTP 客户端
+        2. 优雅停止后台任务
 
     Args:
         app: FastAPI 应用实例
@@ -127,9 +119,6 @@ async def lifespan(app: FastAPI):
     Yields:
         None - 应用运行期间在此等待
     """
-
-    # 声明变量（在关闭阶段需要访问）
-    config_reloader = None
 
     # ========== 启动阶段 ==========
 
@@ -139,20 +128,16 @@ async def lifespan(app: FastAPI):
     # 输出当前配置状态 (仅显示开关状态，不泄露敏感信息)
     log.info(
         f"⚙️ 配置状态: "
-        f"鉴权={'🔴启用' if Config.AUTH_ENABLED else '⚪关闭'} | "
-        f"加密={'🔴启用' if Config.ENCRYPTION_ENABLED else '⚪关闭'} | "
-        f"压缩={'🔴启用' if Config.COMPRESSION_ENABLED else '⚪关闭'} | "
-        f"OSS={'🔴启用' if Config.ENABLE_OSS else '⚪关闭'} | "
-        f"Redis={'🔴启用' if bool(Config.REDIS_URL) else '⚪关闭'}"
+        f"鉴权={'🔴启用' if Config.auth_enabled else '⚪关闭'} | "
+        f"加密={'🔴启用' if Config.encryption_enabled else '⚪关闭'} | "
+        f"压缩={'🔴启用' if Config.compression_enabled else '⚪关闭'} | "
+        f"OSS={'🔴启用' if Config.enable_oss else '⚪关闭'} | "
+        f"Redis={'🔴启用' if bool(Config.redis_url) else '⚪关闭'}"
     )
 
     # 初始化数据库 (创建表结构)
     log.info("🗄️ 正在初始化数据库...")
     await init_db()
-
-    # 启动全局 HTTP 客户端 (复用 TCP 连接)
-    log.info("🌐 正在启动 HTTP 客户端...")
-    http_client.start()
 
     # 初始化加密引擎 (如果启用加密)
     # ⚠️ 如果加密开启但密钥错误/缺失，服务必须停止，防止明文数据泄露
@@ -170,15 +155,6 @@ async def lifespan(app: FastAPI):
     log.info("🧹 正在启动后台清理任务...")
     cleanup_task = asyncio.create_task(clean_expired_task())
 
-    # 启动文件同步任务 (每30秒同步一次)
-    log.info("👁️ 正在启动文件同步任务...")
-    sync_task = asyncio.create_task(sync_missing_files_task())
-
-    # 启动配置文件监听 (支持配置热重载)
-    log.info("👁️ 正在启动配置文件监听...")
-    config_reloader = ConfigReloader()
-    config_reloader.start_watching()
-
     log.info("✅ 图床服务启动完成！")
 
     # ========== 运行阶段 ==========
@@ -189,25 +165,12 @@ async def lifespan(app: FastAPI):
 
     log.info("🛑 正在关闭图床服务...")
 
-    # 停止配置文件监听
-    if config_reloader:
-        config_reloader.stop_watching()
-        log.info("👁️ 配置文件监听已停止")
-
-    # 关闭数据库连接池
-    await close_db()
-    log.info("🗄️ 数据库连接池已关闭")
-
     # 优雅关闭后台任务 (等待最多 5 秒)
-    tasks = [cleanup_task, sync_task]
+    tasks = [cleanup_task]
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     log.info("✅ 后台任务已停止")
-
-    # 关闭 HTTP 客户端
-    await http_client.stop()
-    log.info("🌐 HTTP 客户端已关闭")
 
     log.info("👋 图床服务已完全关闭")
 
@@ -242,7 +205,7 @@ Instrumentator().instrument(app).expose(app)
 # 跨域资源共享配置 - 控制哪些域名可以访问 API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=Config.CORS_ORIGINS,  # 允许的来源 (从 .env 读取)
+    allow_origins=[o.strip() for o in Config.cors_origins.split(",")],  # 允许的来源 (从 .env 读取)
     allow_credentials=True,  # 允许携带凭证 (Cookie)
     allow_methods=["*"],  # 允许所有 HTTP 方法
     allow_headers=["*"],  # 允许所有请求头
@@ -291,14 +254,14 @@ if static_dir.exists():
 # 浏览器默认从根路径请求 favicon.ico，这里重定向到静态文件
 favicon_path = static_dir / "favicon.ico"
 if favicon_path.exists():
-    from fastapi import Response
-    import aiofiles
+    import anyio
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon():
         """🎨 返回 favicon 图标"""
-        async with aiofiles.open(favicon_path, "rb") as f:
+        async with await anyio.open_file(favicon_path, "rb") as f:
             content = await f.read()
+        from fastapi import Response
         return Response(content=content, media_type="image/x-icon")
 
 
@@ -324,4 +287,6 @@ if __name__ == "__main__":
         port=8000,  # 端口号
         reload=True,  # 开启热重载 (代码变更自动重启)
         access_log=False,  # 禁用访问日志 (使用 loguru 统一记录)
+        proxy_headers=True,  # 反代部署时还原真实客户端 IP (限流按 IP 生效)
+        forwarded_allow_ips="127.0.0.1",
     )

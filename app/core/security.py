@@ -99,7 +99,7 @@ async def verify_api_key(api_key: str = Security(api_key_header)) -> bool:
 
     # ========== 使用常量时间比较（防止时序攻击） ==========
     # hmac.compare_digest 以恒定时间比较字符串，不会因字符串内容不同而暴露时间差异
-    if hmac.compare_digest(api_key, Config.api_key):
+    if any(hmac.compare_digest(api_key, k) for k in Config.valid_api_keys):
         # API Key 匹配，验证通过
         return True
 

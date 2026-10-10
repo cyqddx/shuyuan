@@ -68,7 +68,7 @@ class OSSClient:
             ⚠️ OSS 上传失败不会影响主流程，仍会使用本地存储
         """
         # 检查是否启用 OSS
-        if not Config.ENABLE_OSS:
+        if not Config.enable_oss:
             cls._bucket = None
             log.info("☁️ OSS 客户端: 已禁用 (仅使用本地存储)")
             return

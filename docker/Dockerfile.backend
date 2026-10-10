@@ -44,4 +44,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # --port 8000: 端口号
 # --workers 1: 单进程 (SQLite 不支持多进程写入)
 # --no-access-log: 禁用访问日志 (使用 loguru 统一记录)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+# --proxy-headers: 生产部署在 nginx/caddy 反代后还原真实客户端 IP,
+# 否则 slowapi 限流按反代 IP 计数导致全站共享限额 (直接暴露公网时需收紧)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]

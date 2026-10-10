@@ -24,7 +24,7 @@ class TestDataProcessing:
 
         # 获取当前配置的压缩状态
         from app.core.config import Config
-        compression_was_enabled = Config.COMPRESSION_ENABLED
+        compression_was_enabled = Config.compression_enabled
 
         # 先存储原始数据，测试解压功能
         compressed = compress_data(original)
@@ -54,8 +54,8 @@ class TestDataProcessing:
     def test_hash_calculation(self):
         """测试哈希计算"""
         data = b"consistent data"
-        hash1, algo1 = calculate_hash(data, use_blake2b=True)
-        hash2, algo2 = calculate_hash(data, use_blake2b=True)
+        hash1, algo1 = calculate_hash(data)
+        hash2, algo2 = calculate_hash(data)
 
         assert hash1 == hash2
         assert algo1 == "blake2b"
@@ -64,8 +64,8 @@ class TestDataProcessing:
 
     def test_hash_different_data(self):
         """测试不同数据产生不同哈希"""
-        hash1, _ = calculate_hash(b"data1", use_blake2b=True)
-        hash2, _ = calculate_hash(b"data2", use_blake2b=True)
+        hash1, _ = calculate_hash(b"data1")
+        hash2, _ = calculate_hash(b"data2")
 
         assert hash1 != hash2
 

@@ -41,12 +41,12 @@ from typing import Any
 from cachetools import TTLCache  # TTL 缓存
 
 # ========== 内部模块导入 ==========
-from app.core.config import Config
+from app.core.config import Config, UPLOAD_DIR
 from app.database import get_db_connection
 from app.models import TimeLimit
 from app.core.logger import log
-from app.core.http_client import http_client
 from app.core.crypto import CryptoEngine
+from app.core.oss_client import OSSClient
 
 
 # ==========================================
@@ -111,8 +111,6 @@ def _validate_json_structure(obj: Any, depth: int = 0, config: JSONValidationCon
 # 全局缓存：文件元数据（5分钟过期）
 _metadata_cache: TTLCache = TTLCache(maxsize=2048, ttl=300)
 
-# 全局缓存：哈希查重结果（1分钟过期）
-_hash_cache: TTLCache = TTLCache(maxsize=4096, ttl=60)
 
 
 def invalidate_file_cache(file_id: str) -> None:
@@ -145,8 +143,8 @@ def compress_data(data: bytes) -> bytes:
         - 压缩等级由 COMPRESSION_LEVEL 控制 (1-9)
         - 典型 JSON 文件可压缩 60-80%
     """
-    if Config.COMPRESSION_ENABLED:
-        return gzip.compress(data, compresslevel=Config.COMPRESSION_LEVEL)
+    if Config.compression_enabled:
+        return gzip.compress(data, compresslevel=Config.compression_level)
     return data
 
 
@@ -167,34 +165,19 @@ def decompress_data(data: bytes) -> bytes:
         - 非压缩数据直接返回原样
     """
     # 检查是否为 Gzip 格式 (魔数检测)
-    if Config.COMPRESSION_ENABLED and data.startswith(b'\x1f\x8b'):
+    if Config.compression_enabled and data.startswith(b'\x1f\x8b'):
         return gzip.decompress(data)
     return data
 
 
-def calculate_hash(content: bytes, use_blake2b: bool = True) -> tuple[str, str]:
+def calculate_hash(content: bytes) -> tuple[str, str]:
     """
-    🔐 计算数据哈希
+    🔐 计算数据哈希 (blake2b, digest_size=16 → 32 位十六进制，与旧 MD5 记录长度一致)
 
-    使用 blake2b 或 MD5 算法计算内容的哈希值，用于文件去重
-
-    Args:
-        content: 待计算的字节数据
-        use_blake2b: 是否使用 blake2b（默认 True），False 则使用 MD5
-
-    Returns:
-        tuple[str, str]: (哈希值, 哈希算法标识 "blake2b" 或 "md5")
-
-    注意:
-        - blake2b 比 MD5 更快且更安全
-        - digest_size=16 生成 128 位（32 位十六进制），与 MD5 长度相同
-        - 相同内容必然产生相同哈希，实现"秒传"功能
+    相同内容必然产生相同哈希，实现"秒传"功能；旧 md5 记录由查重 SQL 兼容
     """
-    if use_blake2b:
-        # blake2b digest_size=16 生成 128 位（32 位十六进制），与 MD5 长度一致
-        return hashlib.blake2b(content, digest_size=16).hexdigest(), "blake2b"
-    else:
-        return hashlib.md5(content).hexdigest(), "md5"
+    return hashlib.blake2b(content, digest_size=16).hexdigest(), "blake2b"
+
 
 
 def validate_and_minify(content: bytes) -> bytes:
@@ -302,15 +285,23 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
     """
 
     # ========== 1. 文件大小检查 ==========
+    # 先用 UploadFile.size 前置拦截, 避免为超限文件做 JSON 解析/哈希等无用功
+    if file.size is not None and file.size > Config.max_file_size:
+        log.warning(f"📦 文件过大: {file.size} 字节，限制: {Config.max_file_size} 字节")
+        raise HTTPException(
+            status_code=413,
+            detail=f"📦 文件过大，限制为 {Config.max_file_size} 字节"
+        )
+
     # 读取文件内容到内存 (小文件场景)
     raw_content = await file.read()
 
     file_size = len(raw_content)
-    if file_size > Config.MAX_FILE_SIZE:
-        log.warning(f"📦 文件过大: {file_size} 字节，限制: {Config.MAX_FILE_SIZE} 字节")
+    if file_size > Config.max_file_size:  # 兜底 (size 缺失或与实际不符)
+        log.warning(f"📦 文件过大: {file_size} 字节，限制: {Config.max_file_size} 字节")
         raise HTTPException(
             status_code=413,
-            detail=f"📦 文件过大，限制为 {Config.MAX_FILE_SIZE} 字节"
+            detail=f"📦 文件过大，限制为 {Config.max_file_size} 字节"
         )
 
     log.info(f"📦 接收文件: {file.filename} ({file_size} 字节)")
@@ -332,12 +323,12 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
         raise
 
     # ========== 4. 哈希查重 ==========
-    file_hash, hash_algorithm = calculate_hash(minified_content, use_blake2b=True)
+    file_hash, hash_algorithm = calculate_hash(minified_content)
 
     conn = await get_db_connection()
     # 查询是否存在相同哈希的文件（同时支持 blake2b 和 md5）
     cursor = await conn.execute("""
-        SELECT id, oss_path FROM files
+        SELECT id, oss_path, expire_at FROM files
         WHERE (file_hash = ? AND hash_algorithm = 'blake2b')
            OR (file_hash = ? AND hash_algorithm = 'md5')
     """, (file_hash, file_hash))
@@ -346,26 +337,43 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
     if existing:
         # 命中缓存，直接返回现有链接 (秒传)
         log.info(f"✨ 检测到重复文件，使用秒传: {file_hash}")
+
+        # 去重记录被所有秒传方共享: 新请求的有效期更长时延长记录,
+        # 避免后到者选的"永久"被先到者的"1天"拖死 (引用计数思路的简化版)
+        new_expire = calculate_expiry(time_limit)
+        current_expire = existing['expire_at']
+        if isinstance(current_expire, str):
+            current_expire = datetime.datetime.fromisoformat(current_expire)
+        if new_expire is None:
+            # 永久: 任何有限期限都延长为永久
+            if current_expire is not None:
+                await conn.execute("UPDATE files SET expire_at = NULL WHERE id = ?", (existing['id'],))
+                await conn.commit()
+                current_expire = None
+        elif current_expire is not None and new_expire > current_expire:
+            await conn.execute("UPDATE files SET expire_at = ? WHERE id = ?", (new_expire, existing['id']))
+            await conn.commit()
+            current_expire = new_expire
         await conn.close()
 
         # 加密/压缩模式下统一返回 API 链接
-        if Config.ENCRYPTION_ENABLED or Config.COMPRESSION_ENABLED:
-            return_url = f"{Config.HOST_DOMAIN}/f/{existing['id']}"
+        if Config.encryption_enabled or Config.compression_enabled:
+            return_url = f"{Config.host_domain}/f/{existing['id']}{ext}"
         else:
             # 明文模式优先返回 OSS 链接
-            return_url = existing['oss_path'] if existing['oss_path'] else f"{Config.HOST_DOMAIN}/f/{existing['id']}"
+            return_url = existing['oss_path'] if existing['oss_path'] else f"{Config.host_domain}/f/{existing['id']}{ext}"
 
         return {
             "url": return_url,
             "filename": file.filename,
             "is_duplicate": True,
-            "expiry": "永久"
+            "expiry": "永久" if current_expire is None else str(current_expire),
         }
 
     # ========== 5. 数据处理 (压缩 -> 加密) ==========
     # 5.1 压缩 (可选)
     processed_content = compress_data(minified_content)
-    if Config.COMPRESSION_ENABLED:
+    if Config.compression_enabled:
         compression_ratio = len(processed_content) / len(minified_content)
         log.info(f"🗜️ 压缩完成: 压缩率 {compression_ratio:.1%}")
 
@@ -378,22 +386,21 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
 
     # 确定存储文件名
     # 加密/压缩模式下使用 .bin 后缀，避免误导
-    if Config.ENCRYPTION_ENABLED or Config.COMPRESSION_ENABLED:
+    if Config.encryption_enabled or Config.compression_enabled:
         save_filename = f"{file_id}.bin"
     else:
         save_filename = f"{file_id}{ext}"
 
     # 6.1 本地存储
-    local_path = Path(Config.UPLOAD_DIR) / save_filename
+    local_path = Path(UPLOAD_DIR) / save_filename
     async with await anyio.open_file(str(local_path), 'wb') as f:
         await f.write(final_content)
     log.info(f"💾 本地存储完成: {save_filename}")
 
     # 6.2 OSS 存储 (可选)
     oss_url = None
-    if Config.ENABLE_OSS:
+    if Config.enable_oss:
         # 使用 OSS 客户端上传
-        from app.core.oss_client import OSSClient
         try:
             oss_url = await OSSClient.upload(save_filename, final_content)
             log.info(f"☁️ OSS 上传成功: {oss_url}")
@@ -402,12 +409,12 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
             # OSS 上传失败不影响主流程，仍使用本地存储
 
     # ========== 7. 生成返回链接 ==========
-    if Config.ENCRYPTION_ENABLED or Config.COMPRESSION_ENABLED:
+    if Config.encryption_enabled or Config.compression_enabled:
         # 加密/压缩模式必须走 API 解密
-        return_url = f"{Config.HOST_DOMAIN}/f/{file_id}"
+        return_url = f"{Config.host_domain}/f/{file_id}{ext}"
     else:
         # 明文模式优先返回 OSS 链接
-        return_url = oss_url if oss_url else f"{Config.HOST_DOMAIN}/f/{file_id}"
+        return_url = oss_url if oss_url else f"{Config.host_domain}/f/{file_id}{ext}"
 
     # ========== 8. 写入元数据 ==========
     expire_at = calculate_expiry(time_limit)
@@ -463,7 +470,7 @@ async def retrieve_file_content(file_id: str):
     # 先检查缓存
     cached_metadata = _metadata_cache.get(file_id)
     if cached_metadata:
-        local_path = Path(Config.UPLOAD_DIR) / cached_metadata["local_path"]
+        local_path = Path(UPLOAD_DIR) / cached_metadata["local_path"]
         original_name = cached_metadata["filename"]
     else:
         conn = await get_db_connection()
@@ -476,7 +483,7 @@ async def retrieve_file_content(file_id: str):
             log.warning(f"🔍 文件不存在: {file_id}")
             return None, None
 
-        local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+        local_path = Path(UPLOAD_DIR) / row['local_path']
         original_name = row['filename']
         # 写入缓存
         _metadata_cache[file_id] = {"local_path": row['local_path'], "filename": original_name}
@@ -522,115 +529,66 @@ async def retrieve_file_content(file_id: str):
 # 🧹 后台清理任务
 # ==========================================
 
+async def _clean_expired_once(batch_size: int = 100) -> int:
+    """
+    🧹 清理一批过期文件（本地 + OSS + 数据库记录）
+
+    Returns:
+        int: 本批清理数量（0 表示没有过期文件）
+    """
+    conn = await get_db_connection()
+    try:
+        now = datetime.datetime.now()
+        cursor = await conn.execute(
+            "SELECT id, local_path, oss_path FROM files WHERE expire_at < ? LIMIT ?",
+            (now, batch_size)
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return 0
+
+        for row in rows:
+            # 删除本地文件
+            local_full = Path(UPLOAD_DIR) / row['local_path']
+            if local_full.exists():
+                try:
+                    await asyncio.to_thread(local_full.unlink)
+                except OSError as e:
+                    log.error(f"⚠️ 删除本地文件失败 {local_full}: {e}")
+            # 删除 OSS 文件
+            if row['oss_path'] and Config.enable_oss:
+                try:
+                    await OSSClient.delete(row['oss_path'])
+                except Exception as e:
+                    log.error(f"⚠️ 删除 OSS 文件失败 {row['oss_path']}: {e}")
+
+        # 批量删除数据库记录（单次事务）
+        file_ids = [row['id'] for row in rows]
+        placeholders = ','.join('?' * len(file_ids))
+        await conn.execute(f"DELETE FROM files WHERE id IN ({placeholders})", file_ids)
+        await conn.commit()
+
+        for file_id in file_ids:
+            invalidate_file_cache(file_id)
+
+        log.info(f"🧹 已清理 {len(file_ids)} 个过期文件")
+        return len(rows)
+    finally:
+        await conn.close()
+
+
 async def clean_expired_task():
     """
-    🧹 后台清理过期文件任务（优化版）
-
-    功能:
-        - 定期扫描数据库中的过期文件
-        - 批量删除本地文件
-        - 批量删除 OSS 文件 (如果启用)
-        - 批量删除数据库记录
-
-    运行周期:
-        - 每小时执行一次 (3600 秒)
-
-    注意:
-        - 这是一个无限循环的任务，在应用启动时创建
-        - 异常会被捕获并记录，不会中断任务循环
-        - 使用批量操作和并发处理提升性能
+    🧹 后台清理过期文件任务（每小时执行一次，分批直到清完）
     """
-
     log.info("🧹 后台清理任务已启动，每小时执行一次")
-
-    # 批量大小
-    BATCH_SIZE = 100
-
     while True:
         try:
-            # ========== 1. 分批查询过期文件 ==========
-            conn = await get_db_connection()
-            now = datetime.datetime.now()
-
-            # 分批查询过期文件
-            cursor = await conn.execute(
-                "SELECT id, local_path, oss_path FROM files WHERE expire_at < ? LIMIT ?",
-                (now, BATCH_SIZE)
-            )
-            rows = await cursor.fetchall()
-
-            if not rows:
-                await conn.close()
-            else:
-                log.info(f"🧹 发现 {len(rows)} 个过期文件需要清理")
-
-                # ========== 2. 收集需要删除的文件信息 ==========
-                to_delete_local = []
-                to_delete_oss = []
-                file_ids = []
-
-                for row in rows:
-                    file_ids.append(row['id'])
-                    local_full = Path(Config.UPLOAD_DIR) / row['local_path']
-                    to_delete_local.append(str(local_full))
-                    if row['oss_path']:
-                        to_delete_oss.append(row['oss_path'])
-
-                # ========== 3. 并发删除本地文件 ==========
-                async def delete_local(path: str):
-                    path_obj = Path(path)
-                    if path_obj.exists():
-                        try:
-                            await asyncio.to_thread(path_obj.unlink)
-                            return path, True
-                        except OSError as e:
-                            log.error(f"⚠️ 删除本地文件失败 {path}: {e}")
-                            return path, False
-                    return path, False
-
-                local_results = await asyncio.gather(
-                    *[delete_local(p) for p in to_delete_local],
-                    return_exceptions=True
-                )
-
-                deleted_count = sum(1 for r in local_results if isinstance(r, tuple) and r[1])
-                log.info(f"🗑️ 清理任务: 已删除 {deleted_count}/{len(to_delete_local)} 个本地文件")
-
-                # ========== 4. 批量删除 OSS 文件 ==========
-                if to_delete_oss and Config.ENABLE_OSS:
-                    from app.core.oss_client import OSSClient
-                    for oss_url in to_delete_oss:
-                        try:
-                            await OSSClient.delete(oss_url)
-                            log.info(f"☁️ 清理任务: 已删除 OSS 文件 {oss_url}")
-                        except Exception as e:
-                            log.error(f"⚠️ 删除 OSS 文件失败 {oss_url}: {e}")
-
-                # ========== 5. 批量删除数据库记录（单次事务）==========
-                placeholders = ','.join('?' * len(file_ids))
-                await conn.execute(
-                    f"DELETE FROM files WHERE id IN ({placeholders})",
-                    file_ids
-                )
-                await conn.commit()
-                await conn.close()
-
-                # 清除缓存
-                for file_id in file_ids:
-                    invalidate_file_cache(file_id)
-
-                log.info(f"✅ 清理任务完成，共清理 {len(file_ids)} 个文件")
-
-                # ========== 6. 继续检查是否还有更多 ==========
-                if len(rows) == BATCH_SIZE:
-                    continue
-
+            while await _clean_expired_once():
+                pass
         except Exception as e:
             # 捕获所有异常，防止任务循环中断
             log.error(f"🚨 清理任务严重错误: {e}")
-
-        # ========== 7. 等待下次执行 ==========
-        # 每小时执行一次 (3600 秒)
         await asyncio.sleep(3600)
 
 
@@ -699,7 +657,7 @@ async def get_file_list(
     for row in rows:
         # 获取文件大小
         file_size = 0
-        local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+        local_path = Path(UPLOAD_DIR) / row['local_path']
         if local_path.exists():
             file_size = local_path.stat().st_size
 
@@ -756,7 +714,7 @@ async def get_file_detail(file_id: str) -> dict | None:
 
     # 获取文件大小
     file_size = 0
-    local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+    local_path = Path(UPLOAD_DIR) / row['local_path']
     if local_path.exists():
         file_size = local_path.stat().st_size
 
@@ -805,7 +763,7 @@ async def delete_file(file_id: str) -> bool:
         return False
 
     # 删除本地文件
-    local_path = Path(Config.UPLOAD_DIR) / row['local_path']
+    local_path = Path(UPLOAD_DIR) / row['local_path']
     if local_path.exists():
         try:
             await asyncio.to_thread(local_path.unlink)
@@ -813,8 +771,7 @@ async def delete_file(file_id: str) -> bool:
             log.error(f"删除本地文件失败 {local_path}: {e}")
 
     # 删除 OSS 文件
-    if row['oss_path'] and Config.ENABLE_OSS:
-        from app.core.oss_client import OSSClient
+    if row['oss_path'] and Config.enable_oss:
         try:
             await OSSClient.delete(row['oss_path'])
         except Exception as e:
@@ -881,7 +838,7 @@ async def get_storage_stats() -> dict:
     rows = await cursor.fetchall()
 
     now = datetime.datetime.now()
-    upload_dir = Path(Config.UPLOAD_DIR)
+    upload_dir = Path(UPLOAD_DIR)
 
     for row in rows:
         # 获取文件大小
@@ -951,6 +908,7 @@ async def get_upload_trend(days: int = 30) -> dict:
 
     rows = await cursor.fetchall()
     await conn.close()
+    count_by_date = {row['date']: row['count'] for row in rows}
 
     # 构建完整的日期序列
     dates = []
@@ -962,14 +920,7 @@ async def get_upload_trend(days: int = 30) -> dict:
         date_str = date.strftime("%Y-%m-%d")
         dates.append(date_str)
 
-        # 查找该日期的计数 (SQLite 的 DATE() 函数返回字符串，无需格式化)
-        count = 0
-        for row in rows:
-            row_date = row['date'] if row['date'] else ""
-            if row_date == date_str:
-                count = row['count']
-                break
-        counts.append(count)
+        counts.append(count_by_date.get(date_str, 0))
         sizes.append(0)  # 暂不返回大小趋势
 
     return {
@@ -1029,107 +980,11 @@ async def get_expiring_files(days: int = 7) -> dict:
 async def manual_cleanup() -> dict:
     """
     🧹 手动触发清理过期文件
-
-    Returns:
-        dict: 清理结果
     """
-    conn = await get_db_connection()
-    now = datetime.datetime.now()
-
-    # 查询过期文件
-    cursor = await conn.execute("SELECT id, local_path, oss_path FROM files WHERE expire_at < ?")
-    rows = await cursor.fetchall()
-
-    if not rows:
-        await conn.close()
-        return {"cleaned": 0, "message": "没有过期文件需要清理"}
-
     cleaned = 0
-
-    for row in rows:
-        file_id = row['id']
-        local_path = Path(Config.UPLOAD_DIR) / row['local_path']
-
-        # 删除本地文件
-        if local_path.exists():
-            try:
-                await asyncio.to_thread(local_path.unlink)
-            except Exception as e:
-                log.error(f"删除本地文件失败 {local_path}: {e}")
-
-        # 删除 OSS 文件
-        if row['oss_path'] and Config.ENABLE_OSS:
-            from app.core.oss_client import OSSClient
-            try:
-                await OSSClient.delete(row['oss_path'])
-            except Exception as e:
-                log.error(f"删除 OSS 文件失败 {row['oss_path']}: {e}")
-
-        # 删除数据库记录
-        await conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
-        invalidate_file_cache(file_id)
-        cleaned += 1
-
-    await conn.commit()
-    await conn.close()
-
+    while (n := await _clean_expired_once()):
+        cleaned += n
     return {"cleaned": cleaned, "message": f"已清理 {cleaned} 个过期文件"}
-
-
-# ==========================================
-# 👁️ 文件系统监控任务
-# ==========================================
-
-async def sync_missing_files_task():
-    """
-    👁️ 同步丢失文件任务
-
-    功能:
-        - 定期扫描数据库中的文件记录
-        - 检查磁盘文件是否存在
-        - 自动清理丢失文件的数据库记录
-
-    运行周期:
-        - 每 30 秒执行一次
-
-    注意:
-        - 处理磁盘文件被直接删除的情况
-        - 保证数据库与磁盘状态一致
-    """
-    log.info("👁️ 文件同步任务已启动，每 30 秒执行一次")
-
-    while True:
-        try:
-            conn = await get_db_connection()
-
-            # 查询所有文件记录
-            cursor = await conn.execute("SELECT id, local_path FROM files")
-            rows = await cursor.fetchall()
-            await conn.close()
-
-            missing_count = 0
-            for row in rows:
-                file_id = row['id']
-                local_path = Path(Config.UPLOAD_DIR) / row['local_path']
-
-                # 检查文件是否存在
-                if not local_path.exists():
-                    missing_count += 1
-                    log.info(f"🗑️ 发现丢失文件: {file_id}，清理数据库记录")
-                    conn = await get_db_connection()
-                    await conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
-                    await conn.commit()
-                    await conn.close()
-                    invalidate_file_cache(file_id)
-
-            if missing_count > 0:
-                log.info(f"✅ 同步任务完成，清理 {missing_count} 个丢失文件记录")
-
-        except Exception as e:
-            log.error(f"🚨 文件同步任务错误: {e}")
-
-        # 等待 30 秒后再次执行
-        await asyncio.sleep(30)
 
 
 # ==========================================
@@ -1336,7 +1191,7 @@ async def get_prometheus_metrics() -> dict:
         result["system"]["total_memory"] = round(mem.total / 1024 / 1024, 2)
 
         # CPU 使用率（系统级，百分比）
-        result["system"]["cpu_usage"] = round(psutil.cpu_percent(interval=0.1), 2)
+        result["system"]["cpu_usage"] = round(psutil.cpu_percent(interval=None), 2)
     except Exception as e:
         log.warning(f"获取系统指标失败: {e}")
 

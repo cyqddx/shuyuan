@@ -91,12 +91,9 @@ tuchuang/
 │   └── core/
 │       ├── config.py             # ⚙️ 配置管理（支持热重载）
 │       ├── crypto.py             # 🔐 加解密引擎
-│       ├── http_client.py        # 🌐 HTTP 客户端
 │       ├── logger.py             # 📝 日志配置
 │       ├── oss_client.py         # ☁️ OSS 客户端
 │       ├── security.py           # 🚦 限流与鉴权
-│       ├── config_watcher.py     # 👁️ 文件监听器
-│       └── config_reloader.py    # 🔄 配置重载协调器
 │
 ├── admin/                        # 🎨 前端管理界面 (Next.js)
 │   ├── app/                      # Next.js App Router
@@ -120,7 +117,6 @@ tuchuang/
 │
 ├── docs/                         # 📚 文档
 │   ├── DEPLOYMENT.md             # 部署指南
-│   ├── ERROR_CODES.md            # 错误码文档
 │   └── TROUBLESHOOTING.md         # 故障排查
 │
 ├── static/                       # 静态资源
@@ -141,7 +137,6 @@ tuchuang/
 | 文档 | 说明 |
 |------|------|
 | [部署指南](docs/DEPLOYMENT.md) | 生产环境部署、监控、备份、安全建议 |
-| [错误码文档](docs/ERROR_CODES.md) | HTTP 状态码、业务错误码、错误响应格式 |
 | [故障排查](docs/TROUBLESHOOTING.md) | 常见问题及解决方案 |
 | [Docker 部署](docker/README.md) | Docker 部署详细说明 |
 

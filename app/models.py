@@ -163,91 +163,6 @@ class UploadResponse(BaseModel):
 
 
 # ==========================================
-# 📋 管理后台数据模型
-# ==========================================
-
-class FileListItem(BaseModel):
-    """文件列表项"""
-
-    id: str = Field(..., description="文件 ID")
-    filename: str = Field(..., description="文件名")
-    file_hash: str = Field(..., description="文件哈希")
-    local_path: str = Field(..., description="本地路径")
-    oss_path: Optional[str] = Field(None, description="OSS 路径")
-    expire_at: Optional[datetime] = Field(None, description="过期时间")
-    created_at: datetime = Field(..., description="创建时间")
-    file_size: Optional[int] = Field(None, description="文件大小（字节）")
-    is_expired: bool = Field(False, description="是否已过期")
-
-
-class FileListResponse(BaseModel):
-    """文件列表响应"""
-
-    items: List[FileListItem] = Field(..., description="文件列表")
-    total: int = Field(..., description="总数")
-    page: int = Field(..., description="当前页")
-    page_size: int = Field(..., description="每页大小")
-    total_pages: int = Field(..., description="总页数")
-
-
-class FileDetail(BaseModel):
-    """文件详情"""
-
-    id: str = Field(..., description="文件 ID")
-    filename: str = Field(..., description="文件名")
-    file_hash: str = Field(..., description="文件哈希")
-    hash_algorithm: str = Field(..., description="哈希算法")
-    local_path: str = Field(..., description="本地路径")
-    oss_path: Optional[str] = Field(None, description="OSS 路径")
-    expire_at: Optional[datetime] = Field(None, description="过期时间")
-    created_at: datetime = Field(..., description="创建时间")
-    file_size: int = Field(..., description="文件大小（字节）")
-    content: Optional[str] = Field(None, description="文件内容（JSON）")
-
-
-class StorageStats(BaseModel):
-    """存储统计"""
-
-    total_files: int = Field(..., description="文件总数")
-    total_size: int = Field(..., description="总存储大小（字节）")
-    by_type: dict = Field(..., description="按类型统计")
-    by_expiry: dict = Field(..., description="按过期时间统计")
-    expired_count: int = Field(..., description="已过期文件数")
-
-
-class TrendItem(BaseModel):
-    """趋势数据项"""
-
-    date: str = Field(..., description="日期")
-    count: int = Field(..., description="数量")
-    size: int = Field(..., description="大小（字节）")
-
-
-class TrendData(BaseModel):
-    """趋势数据"""
-
-    dates: List[str] = Field(..., description="日期列表")
-    counts: List[int] = Field(..., description="数量列表")
-    sizes: List[int] = Field(..., description="大小列表")
-
-
-class ExpiringFile(BaseModel):
-    """即将过期的文件"""
-
-    id: str = Field(..., description="文件 ID")
-    filename: str = Field(..., description="文件名")
-    expire_at: datetime = Field(..., description="过期时间")
-    days_until_expiry: int = Field(..., description="剩余天数")
-
-
-class ExpiringData(BaseModel):
-    """即将过期数据"""
-
-    expiring_soon: int = Field(..., description="即将过期数量")
-    files: List[ExpiringFile] = Field(..., description="即将过期的文件列表")
-
-
-# ==========================================
 # ⚙️ 配置管理模型
 # ==========================================
 
@@ -276,12 +191,6 @@ class ConfigCategory(BaseModel):
     items: List[ConfigItem] = Field(..., description="配置项列表")
 
 
-class ConfigListResponse(BaseModel):
-    """配置列表响应"""
-    categories: List[ConfigCategory] = Field(..., description="配置分类列表")
-    categories_order: List[str] = Field(..., description="分类顺序")
-
-
 class ConfigUpdateRequest(BaseModel):
     """配置更新请求"""
     updates: dict[str, str] = Field(..., description="配置更新 {key: value}")
@@ -302,15 +211,8 @@ __all__ = [
     "TimeLimit",         # 文件有效期枚举
     "FileData",          # 文件信息响应体
     "UploadResponse",    # 统一 API 响应格式
-    "FileListItem",      # 文件列表项
-    "FileListResponse",  # 文件列表响应
-    "FileDetail",        # 文件详情
-    "StorageStats",      # 存储统计
-    "TrendData",         # 趋势数据
-    "ExpiringData",      # 即将过期数据
     "ConfigItem",        # 配置项
     "ConfigCategory",    # 配置分类
-    "ConfigListResponse",  # 配置列表响应
     "ConfigUpdateRequest",  # 配置更新请求
     "ConfigUpdateResponse",  # 配置更新响应
 ]

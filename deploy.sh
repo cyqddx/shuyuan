@@ -192,7 +192,7 @@ After=network.target
 [Service]
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
-ExecStart=$VENV_BIN/uvicorn main:app --host 0.0.0.0 --port $APP_PORT --workers 1 --no-access-log
+ExecStart=$VENV_BIN/uvicorn main:app --host 0.0.0.0 --port $APP_PORT --workers 1 --no-access-log --proxy-headers --forwarded-allow-ips '*'
 Restart=always
 RestartSec=3
 
@@ -207,6 +207,8 @@ EOF
             NODE_MAJOR=$(node -v | sed 's/^v//' | cut -d. -f1)
             if [ "$NODE_MAJOR" -lt 20 ]; then
                 echo "⚠️  Node 版本过低 (需要 20+),跳过管理后台"
+            elif ! command -v pnpm >/dev/null 2>&1; then
+                echo "⚠️  未安装 pnpm (npm i -g pnpm 或 corepack enable),跳过管理后台"
             else
                 echo "📦 构建管理后台..."
                 # NEXT_PUBLIC_* 是构建期内联到浏览器代码的,必须在 build 时注入
@@ -215,10 +217,10 @@ EOF
                 (
                     cd admin
                     export NEXT_PUBLIC_API_URL="$HOST_DOMAIN_VAL" NEXT_PUBLIC_API_KEY="$API_KEY_VAL"
-                    npm ci
-                    npm run build
+                    pnpm install --frozen-lockfile
+                    pnpm run build
                 )
-                NPM_BIN=$(command -v npm)
+                PNPM_BIN=$(command -v pnpm)
                 $SUDO tee /etc/systemd/system/tuchuang-admin.service > /dev/null <<EOF
 [Unit]
 Description=Tuchuang admin (Next.js)
@@ -229,7 +231,7 @@ WorkingDirectory=$APP_DIR/admin
 Environment=NODE_ENV=production
 Environment=PORT=$ADMIN_PORT
 Environment=HOSTNAME=0.0.0.0
-ExecStart=$NPM_BIN run start
+ExecStart=$PNPM_BIN run start
 Restart=always
 RestartSec=3
 

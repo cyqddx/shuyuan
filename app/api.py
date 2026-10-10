@@ -18,6 +18,7 @@ API 端点:
 from fastapi import APIRouter, UploadFile, File, Form, Request, Depends, Response, HTTPException, Query, Security
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
+from urllib.parse import quote
 
 # ========== 内部模块导入 ==========
 # 数据模型
@@ -161,6 +162,8 @@ async def get_file(
     """
 
     # 调用核心业务逻辑获取文件内容
+    # 兼容带后缀的链接 (/f/xxx.json)，文件 ID 为纯十六进制不含点号
+    file_id = file_id.split(".")[0]
     content_bytes, filename = await retrieve_file_content(file_id)
 
     # 检查文件是否存在
@@ -173,7 +176,8 @@ async def get_file(
         content=content_bytes,
         media_type="application/json; charset=utf-8",
         headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
+            # RFC 5987 编码: 非 ASCII 文件名直接进 latin-1 头会抛 UnicodeEncodeError
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}",
             "Cache-Control": "public, max-age=3600"  # 缓存 1 小时
         }
     )
@@ -226,24 +230,24 @@ async def health_check() -> Dict[str, Any]:
         db_status = "🔴 异常"
 
     # ========== 检查加密引擎 ==========
-    if Config.ENCRYPTION_ENABLED:
+    if Config.encryption_enabled:
         from app.core.crypto import CryptoEngine
         crypto_status = "🟢 已启用" if CryptoEngine.is_enabled() else "🔴 异常"
     else:
         crypto_status = "🔴 未启用"
 
     # ========== 检查压缩 ==========
-    compression_status = "🟢 已启用" if Config.COMPRESSION_ENABLED else "🔴 未启用"
+    compression_status = "🟢 已启用" if Config.compression_enabled else "🔴 未启用"
 
     # ========== 检查 OSS ==========
-    if Config.ENABLE_OSS:
+    if Config.enable_oss:
         from app.core.oss_client import OSSClient
         oss_status = "🟢 已启用" if OSSClient.is_enabled() else "🔴 异常"
     else:
         oss_status = "🔴 未启用"
 
     # ========== 检查 Redis ==========
-    redis_status = "🟢 已连接" if Config.REDIS_URL else "🔴 未启用"
+    redis_status = "🟢 已连接" if Config.redis_url else "🔴 未启用"
 
     # ========== 汇总状态 ==========
     # 只有 "异常" 状态才算异常，"未启用" 是正常状态
@@ -263,12 +267,19 @@ async def health_check() -> Dict[str, Any]:
     }
 
 
+# 管理端点统一鉴权 (AUTH_ENABLED=false 时 verify_api_key 直接放行)
+admin_router = APIRouter(
+    prefix="/admin",
+    dependencies=[Security(verify_api_key)],
+    tags=["Admin"],
+)
+
+
 # ==========================================
 # 📊 管理员统计接口
 # ==========================================
 
-@router.get(
-    "/admin/stats",
+@admin_router.get("/stats",
     summary="系统统计",
     description="获取文件总数和系统配置状态 (需要鉴权)"
 )
@@ -310,11 +321,11 @@ async def admin_stats():
     return {
         "total_files": count,
         "config_status": {
-            "auth": Config.AUTH_ENABLED,
-            "encryption": Config.ENCRYPTION_ENABLED,
-            "compression": Config.COMPRESSION_ENABLED,
-            "oss": Config.ENABLE_OSS,
-            "redis": bool(Config.REDIS_URL)
+            "auth": Config.auth_enabled,
+            "encryption": Config.encryption_enabled,
+            "compression": Config.compression_enabled,
+            "oss": Config.enable_oss,
+            "redis": bool(Config.redis_url)
         }
     }
 
@@ -328,19 +339,19 @@ class BatchDeleteRequest(BaseModel):
     file_ids: List[str]
 
 
-@router.get("/admin/files", summary="文件列表", description="获取文件列表（分页、搜索、排序）")
+@admin_router.get("/files", summary="文件列表", description="获取文件列表（分页、搜索、排序）")
 async def admin_files_list(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页大小"),
     search: str = Query("", description="搜索关键词"),
-    sort: str = Query("created_at", description="排序字段"),
+    sort: str = Query("created_at", pattern="^(created_at|expire_at|filename|file_hash|id)$", description="排序字段"),
     order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向")
 ):
     """获取文件列表"""
     return await get_file_list(page, page_size, search, sort, order)
 
 
-@router.get("/admin/files/{file_id}", summary="文件详情", description="获取文件详细信息")
+@admin_router.get("/files/{file_id}", summary="文件详情", description="获取文件详细信息")
 async def admin_file_detail(file_id: str):
     """获取文件详情"""
     result = await get_file_detail(file_id)
@@ -349,7 +360,7 @@ async def admin_file_detail(file_id: str):
     return result
 
 
-@router.delete("/admin/files/{file_id}", summary="删除文件", description="删除指定文件")
+@admin_router.delete("/files/{file_id}", summary="删除文件", description="删除指定文件")
 async def admin_delete_file(file_id: str):
     """删除文件"""
     result = await delete_file(file_id)
@@ -358,32 +369,32 @@ async def admin_delete_file(file_id: str):
     return {"message": "删除成功"}
 
 
-@router.delete("/admin/files/batch", summary="批量删除", description="批量删除文件")
+@admin_router.delete("/files/batch", summary="批量删除", description="批量删除文件")
 async def admin_batch_delete(request: BatchDeleteRequest):
     """批量删除文件"""
     result = await batch_delete_files(request.file_ids)
     return result
 
 
-@router.get("/admin/stats/storage", summary="存储统计", description="获取存储使用统计")
+@admin_router.get("/stats/storage", summary="存储统计", description="获取存储使用统计")
 async def admin_storage_stats():
     """获取存储统计"""
     return await get_storage_stats()
 
 
-@router.get("/admin/stats/trend", summary="上传趋势", description="获取上传趋势数据")
+@admin_router.get("/stats/trend", summary="上传趋势", description="获取上传趋势数据")
 async def admin_upload_trend(days: int = Query(30, ge=1, le=90, description="统计天数")):
     """获取上传趋势"""
     return await get_upload_trend(days)
 
 
-@router.get("/admin/stats/expiring", summary="即将过期", description="获取即将过期的文件")
+@admin_router.get("/stats/expiring", summary="即将过期", description="获取即将过期的文件")
 async def admin_expiring_files(days: int = Query(7, ge=1, le=30, description="天数范围")):
     """获取即将过期的文件"""
     return await get_expiring_files(days)
 
 
-@router.post("/admin/cleanup", summary="清理过期", description="手动清理过期文件")
+@admin_router.post("/cleanup", summary="清理过期", description="手动清理过期文件")
 async def admin_cleanup():
     """手动清理过期文件"""
     return await manual_cleanup()
@@ -393,7 +404,7 @@ async def admin_cleanup():
 # ⚙️ 配置管理 API
 # ==========================================
 
-@router.get("/admin/config", summary="获取配置", description="获取系统所有配置项")
+@admin_router.get("/config", summary="获取配置", description="获取系统所有配置项")
 async def admin_get_config():
     """
     ⚙️ 获取系统配置
@@ -423,11 +434,10 @@ async def admin_get_config():
     return {
         "categories": [c.model_dump() for c in categories],
         "categories_order": CATEGORIES,
-        "version": Config.version  # 配置版本号（用于热重载检测）
     }
 
 
-@router.post("/admin/config/generate/{key_type}", summary="生成密钥", description="生成指定类型的密钥")
+@admin_router.post("/config/generate/{key_type}", summary="生成密钥", description="生成指定类型的密钥")
 async def admin_generate_key(key_type: str):
     """
     🔑 生成密钥
@@ -460,7 +470,7 @@ async def admin_generate_key(key_type: str):
         return {"error": f"不支持的密钥类型: {key_type}"}
 
 
-@router.post("/admin/config", summary="更新配置", description="更新系统配置并自动重启服务")
+@admin_router.post("/config", summary="更新配置", description="更新系统配置并自动重启服务")
 async def admin_update_config(request: ConfigUpdateRequest):
     """
     ⚙️ 更新系统配置
@@ -497,7 +507,7 @@ async def admin_update_config(request: ConfigUpdateRequest):
 # 📊 监控指标 API
 # ==========================================
 
-@router.get("/admin/metrics", summary="监控指标", description="获取 Prometheus 监控指标（JSON 格式）")
+@admin_router.get("/metrics", summary="监控指标", description="获取 Prometheus 监控指标（JSON 格式）")
 async def admin_get_metrics():
     """
     📊 获取监控指标
@@ -548,45 +558,10 @@ async def admin_get_metrics():
     }
 
 
-@router.get("/monitoring", summary="监控页面", description="返回独立监控页面")
-async def monitoring_page():
-    """
-    📊 独立监控页面
-
-    返回一个独立的 HTML 监控页面，无需前端框架即可使用
-
-    Returns:
-        HTMLResponse: 独立监控页面的 HTML 内容
-    """
-    from fastapi.responses import HTMLResponse
-    from pathlib import Path
-
-    template_path = Path(__file__).parent.parent / "app" / "templates" / "monitoring.html"
-
-    if template_path.exists():
-        with open(template_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    else:
-        # 如果模板文件不存在，返回默认内容
-        content = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>图床服务监控</title>
-            <meta charset="utf-8">
-        </head>
-        <body>
-            <h1>监控页面模板未找到</h1>
-            <p>请确保 app/templates/monitoring.html 文件存在</p>
-        </body>
-        </html>
-        """
-
-    return HTMLResponse(content=content)
-
-
 # ==========================================
 # 📤 导出路由器
 # ==========================================
+
+router.include_router(admin_router)
 
 __all__ = ["router"]
