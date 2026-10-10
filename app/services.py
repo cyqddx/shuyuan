@@ -373,8 +373,8 @@ async def process_file_upload(file: UploadFile, time_limit: TimeLimit):
     final_content = CryptoEngine.encrypt(processed_content)
 
     # ========== 6. 文件存储 ==========
-    # 生成唯一的文件 ID (8 位十六进制，使用安全的随机数)
-    file_id = secrets.token_hex(4)
+    # 生成唯一的文件 ID (16 位十六进制，使用安全的随机数)
+    file_id = secrets.token_hex(8)
 
     # 确定存储文件名
     # 加密/压缩模式下使用 .bin 后缀，避免误导

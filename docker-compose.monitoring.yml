@@ -14,7 +14,11 @@ services:
     container_name: tuchuang_prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    # tuchuang 解析到宿主机 (systemd 模式下后端不在 Docker 网络中;
+    # Docker 模式下服务名优先,不影响容器间直连)
+    extra_hosts:
+      - "tuchuang:host-gateway"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -24,11 +28,7 @@ services:
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
       - '--web.enable-lifecycle'
-    networks:
-      - tuchuang_network
-    # 依赖后端服务启动
-    depends_on:
-      - tuchuang
+    # 跨文件无法 depends_on,由 deploy.sh 保证后端先启动
 
   # ==========================================
   # 📈 Grafana - 监控可视化
@@ -38,7 +38,7 @@ services:
     container_name: tuchuang_grafana
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -49,8 +49,6 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=http://localhost:3001
       - GF_INSTALL_PLUGINS=
-    networks:
-      - tuchuang_network
     depends_on:
       - prometheus
 
@@ -80,8 +78,3 @@ volumes:
   grafana_data:
     driver: local
 
-# 网络
-networks:
-  tuchuang_network:
-    driver: bridge
-    external: true

@@ -73,24 +73,15 @@ docker-compose up -d --build
 #### 仅启动后端
 
 ```bash
-docker-compose -f docker-compose.backend.yml up -d --build
+docker compose up -d --build tuchuang
 ```
-
-#### 仅启动前端
-
-```bash
-docker-compose -f docker-compose.frontend.yml up -d --build
-```
-
-> 注意：单独启动前端时，需要设置环境变量 `NEXT_PUBLIC_API_URL` 指向后端地址
 
 ### 4.3 常用命令
 
 | 命令 | 说明 |
 |------|------|
 | `docker-compose up -d --build` | 构建并启动所有服务 |
-| `docker-compose -f docker-compose.backend.yml up -d --build` | 仅启动后端 |
-| `docker-compose -f docker-compose.frontend.yml up -d --build` | 仅启动前端 |
+| `docker compose up -d --build tuchuang` | 仅启动后端 |
 | `docker-compose down` | 停止并删除所有服务 |
 | `docker-compose logs -f` | 查看所有服务日志 |
 | `docker-compose logs -f tuchuang` | 查看后端服务日志 |

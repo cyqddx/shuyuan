@@ -131,8 +131,6 @@ tuchuang/
 ├── .env.example                  # 📄 配置示例
 ├── pyproject.toml                # 📦 Python 依赖
 ├── docker-compose.yml            # 🐳 完整部署（前后端）
-├── docker-compose.backend.yml    # 🐳 仅后端
-├── docker-compose.frontend.yml   # 🐳 仅前端
 └── main.py                       # 🚀 应用入口
 ```
 
@@ -177,14 +175,14 @@ docker-compose up -d --build
 - API 文档: http://localhost:8000/docs
 - 前端管理: http://localhost:3000
 
-### 方式 B: Docker 分别部署
+### 方式 B: 部署脚本 (推荐)
 
 ```bash
-# 仅启动后端
-docker-compose -f docker-compose.backend.yml up -d --build
-
-# 仅启动前端
-docker-compose -f docker-compose.frontend.yml up -d --build
+sudo ./deploy.sh                          # systemd 直跑 (默认,省资源)
+sudo ./deploy.sh --docker                 # Docker 模式
+sudo ./deploy.sh --backend-only           # 仅后端
+sudo ./deploy.sh nginx                    # Nginx 反代 + acme.sh HTTPS 证书
+./deploy.sh help                          # 全部命令 (stop/restart/status/logs/clean)
 ```
 
 ### 方式 C: 本地部署

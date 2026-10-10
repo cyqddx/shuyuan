@@ -136,7 +136,7 @@ async def upload_endpoint(
 @limiter.limit(Config.rate_limit)  # 应用限流
 async def get_file(
     request: Request,   # 请求对象 (用于限流)
-    file_id: str        # 文件 ID (8 位十六进制)
+    file_id: str        # 文件 ID (16 位十六进制)
 ):
     """
     📥 文件下载接口

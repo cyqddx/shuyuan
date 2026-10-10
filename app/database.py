@@ -148,7 +148,7 @@ async def init_db():
         # ========== 创建文件表 ==========
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
-                id TEXT PRIMARY KEY,         -- 文件唯一 ID (8 位十六进制)
+                id TEXT PRIMARY KEY,         -- 文件唯一 ID (16 位十六进制)
                 file_hash TEXT,              -- 内容哈希 (用于去重)
                 hash_algorithm TEXT DEFAULT 'md5',  -- 哈希算法 (blake2b 或 md5)
                 filename TEXT,               -- 原始文件名
